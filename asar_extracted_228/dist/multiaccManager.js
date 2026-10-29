@@ -94,7 +94,8 @@ class MultiaccManager {
 
                 if (req.method === "GET" && pathname === "/api/presets") {
                     try {
-                        const { skillManager } = require("./skillManager");
+                        try { delete require.cache[require.resolve("./skillManager")]; } catch (_) {}
+                    const { skillManager } = require("./skillManager");
                         const presets = skillManager.getPresets();
                         const activePreset = skillManager.getActivePreset();
                         sendJson(200, { ok: true, presets, activePreset });
@@ -111,7 +112,8 @@ class MultiaccManager {
                         try {
                             const parsed = JSON.parse(body || "{}");
                             const targetPreset = parsed.preset;
-                            const { skillManager } = require("./skillManager");
+                            try { delete require.cache[require.resolve("./skillManager")]; } catch (_) {}
+                    const { skillManager } = require("./skillManager");
                             let workspacePath = process.cwd();
                             try {
                                 const os = require("os");

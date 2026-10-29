@@ -1,6 +1,6 @@
 ---
 name: agent-preset-conductor
-description: Autonomous preset orchestrator. Enables the agent to dynamically switch active skill presets (web, backend, devops, appsec, qa, web-research, reverse-engineering, minimal) via local HTTP IPC bridge (51122).
+description: Autonomous preset orchestrator. Enables the agent to dynamically switch active skill presets (web, backend, devops, appsec, qa, web-research, reverse-engineering, minimal, all) via local HTTP IPC bridge (51122) or atomic filesystem fallback.
 ---
 
 # Agent Preset Conductor
@@ -20,4 +20,5 @@ Autonomous meta-skill for dynamic context orchestration. Allows the agent to swi
    - All tools enabled -> `all`
 2. Run the switch script:
    `python scripts/switch.py <preset_name>`
+   *(or `python "%USERPROFILE%\.gemini\config\skills\agent-preset-conductor\scripts\switch.py" <preset_name>`)*
 3. Check the output confirmation before using new specialized skills.

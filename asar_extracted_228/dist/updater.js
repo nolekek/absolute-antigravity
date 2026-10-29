@@ -159,8 +159,8 @@ function initAutoUpdater(isHeadless, settingsService) {
         electron_updater_1.autoUpdater.channel = `latest-${process.arch}`;
     }
     electron_updater_1.autoUpdater.requestHeaders = { 'x-app-version': electron_1.app.getVersion() };
-    electron_updater_1.autoUpdater.autoDownload = true;
-    electron_updater_1.autoUpdater.autoInstallOnAppQuit = electron_1.app.isPackaged;
+    electron_updater_1.autoUpdater.autoDownload = false;
+    electron_updater_1.autoUpdater.autoInstallOnAppQuit = false;
     // Auto-updater event handlers → broadcast to renderer
     electron_updater_1.autoUpdater.on('checking-for-update', () => {
         console.log('[AutoUpdater] Checking for update…');
@@ -231,18 +231,11 @@ function initAutoUpdater(isHeadless, settingsService) {
         updateMenuState(MenuUpdateStep.CheckForUpdates);
         isManualCheck = false;
     });
-    // Schedule periodic checks if needed
+    // Periodic auto-check disabled to protect custom patched builds from restart loops
     updaterInitialized = true;
-    setTimeout(async () => {
-        const autoCheckEnabled = await settingsService.getSetting(settingsService_1.SettingKey.AUTO_CHECK_FOR_UPDATES);
-        setAutoUpdateChecking(autoCheckEnabled);
-    }, INITIAL_CHECK_DELAY_MS);
-    // Cancel or restart periodic checks on setting change
-    settingsService.onSettingChanged(settingsService_1.SettingKey.AUTO_CHECK_FOR_UPDATES, (enabled) => {
-        setAutoUpdateChecking(enabled);
-    });
 }
 function checkForUpdates(isManual = false) {
+    if (!isManual) return;
     isManualCheck = isManual;
     electron_updater_1.autoUpdater.checkForUpdates().catch((err) => {
         console.error('[AutoUpdater] Failed to check for updates:', err.message);
@@ -265,13 +258,10 @@ function quitAndInstall() {
  */
 function getHostUpdateStatus() {
     const currentVersion = electron_1.app.getVersion();
-    const state = getLastState();
-    const knownVersion = state.update?.version;
-    const updateAvailable = UPDATE_PENDING_STATES.has(state.type) && knownVersion !== undefined;
     return {
         currentVersion,
-        latestVersion: updateAvailable ? knownVersion : currentVersion,
-        updateAvailable,
+        latestVersion: currentVersion,
+        updateAvailable: false,
     };
 }
 /**
@@ -284,30 +274,8 @@ function getHostUpdateStatus() {
  * Returns false only when there is genuinely nothing we can do.
  */
 function applyHostUpdate() {
-    const state = getLastState();
-    switch (state.type) {
-        case types_1.UpdateState.Ready:
-            // quitAndInstall is a no-op (and logs a warning) in an unpackaged dev
-            // build, so don't claim we accepted it.
-            if (!electron_1.app.isPackaged) {
-                console.log('[AutoUpdater] Skipping quitAndInstall (requires a packaged app).');
-                return false;
-            }
-            quitAndInstall();
-            return true;
-        case types_1.UpdateState.AvailableForDownload:
-        case types_1.UpdateState.Downloading:
-            // Already downloading; it installs once the download completes.
-            console.log('[AutoUpdater] Update already in progress.');
-            return true;
-        case types_1.UpdateState.CheckingForUpdates:
-            // A check is in flight — starting another would race it.
-            return true;
-        default:
-            // Nothing known yet. Kick off a check so an update can proceed.
-            checkForUpdates();
-            return true;
-    }
+    console.log('[AutoUpdater] Host update suppressed in patched build to preserve stability.');
+    return false;
 }
 /**
  * Electron native quitAndInstall doesn't relaunch the app with command line arguments.

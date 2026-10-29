@@ -267,19 +267,37 @@ class SkillManager {
             const lowerActive = path.join(dirPath, "skill.md");
             const lowerDisabled = path.join(dirPath, "skill.md.disabled");
 
+            const safeRename = (src, dst) => {
+                let attempts = 0;
+                while (attempts < 5) {
+                    try {
+                        fs.renameSync(src, dst);
+                        return true;
+                    } catch (err) {
+                        attempts++;
+                        if ((err.code === "EBUSY" || err.code === "EPERM") && attempts < 5) {
+                            const start = Date.now();
+                            while (Date.now() - start < 30) {}
+                        } else {
+                            throw err;
+                        }
+                    }
+                }
+            };
+
             if (targetState === false) {
                 // Disable
                 if (fs.existsSync(activeFile)) {
-                    fs.renameSync(activeFile, disabledFile);
+                    safeRename(activeFile, disabledFile);
                 } else if (fs.existsSync(lowerActive)) {
-                    fs.renameSync(lowerActive, lowerDisabled);
+                    safeRename(lowerActive, lowerDisabled);
                 }
             } else if (targetState === true) {
                 // Enable
                 if (fs.existsSync(disabledFile)) {
-                    fs.renameSync(disabledFile, activeFile);
+                    safeRename(disabledFile, activeFile);
                 } else if (fs.existsSync(lowerDisabled)) {
-                    fs.renameSync(lowerDisabled, lowerActive);
+                    safeRename(lowerDisabled, lowerActive);
                 }
             }
 
@@ -292,10 +310,11 @@ class SkillManager {
     applyPreset(presetSkills, workspacePath) {
         const { skills } = this.getSkills(workspacePath);
         const targetSet = new Set(presetSkills);
-        const ALWAYS_ACTIVE = new Set(["agent-preset-conductor"]);
+        const isAll = !presetSkills || presetSkills.length === 0;
+        const ALWAYS_ACTIVE = new Set(["agent-preset-conductor", "ai-product-partner"]);
 
         for (const s of skills) {
-            const shouldBeActive = ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
+            const shouldBeActive = isAll || ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
             if (s.enabled !== shouldBeActive) {
                 this.toggleSkill(s.dirPath, shouldBeActive);
             }
@@ -314,7 +333,7 @@ class SkillManager {
         const { skills } = this.getSkills(workspacePath);
         const targetSet = new Set(presetObj.skills);
         const isAll = key === "all";
-        const ALWAYS_ACTIVE = new Set(["agent-preset-conductor"]);
+        const ALWAYS_ACTIVE = new Set(["agent-preset-conductor", "ai-product-partner"]);
 
         const activated = [];
         for (const s of skills) {
