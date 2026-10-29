@@ -1,0 +1,3146 @@
+#!/usr/bin/env python3
+"""Patch Antigravity eligibility gates and manage Windows login profiles."""
+from __future__ import annotations
+import argparse, base64, contextlib, errno, filecmp, functools, glob, hashlib, json, mmap, os, plistlib, re, shutil, sqlite3, struct, subprocess, sys, tempfile, time
+import datetime, math, urllib.error, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from xml.parsers.expat import ExpatError
+try:
+    import winreg
+except Exception:
+    winreg = None
+
+BAK = ".agybak"
+MAC_SIGNATURE_BAK = ".agysignbak"
+MAC_DISABLE_LIBRARY_VALIDATION = "com.apple.security.cs.disable-library-validation"
+TARGETS = ("cli", "manager", "ide", "extension")
+
+# Utilities
+def _say(tag, msg): print(f"  [{tag}] {msg}")
+def ok(m):   _say("ok", m)
+def info(m): _say("..", m)
+def warn(m): _say("!!", m)
+
+def _patch_success(app, change, offset):
+    ok(f"{app} patched ({change} @ file 0x{offset:x})")
+
+def _bin(name):
+    return name + (".exe" if os.name == "nt" else "")
+
+def _mac_write_permission_hint(path, error):
+    if (sys.platform == "darwin" and error.errno == errno.EPERM and
+            _mac_app_bundle(path)):
+        warn("macOS blocked modification of an app bundle; App Management permission may be required")
+        info("open System Settings > Privacy & Security > App Management and enable the app running this command "
+             "(your terminal app, or your editor when using its integrated terminal)")
+        info("quit and reopen that terminal/editor, then retry; sudo does not grant macOS privacy permissions")
+        return True
+    return False
+
+def is_locked(path, app=None):
+    """Check write access, optionally reporting why the file cannot be opened."""
+    try:
+        with open(path, "r+b"):
+            return False
+    except OSError as e:
+        # macOS can deny opening a signed executable for in-place writes even
+        # when its owner can replace it. Probe the directory without touching it.
+        if sys.platform == "darwin" and e.errno == errno.EPERM:
+            try:
+                actual = os.path.realpath(path)
+                fd, probe = tempfile.mkstemp(prefix=".agy-write-", dir=os.path.dirname(actual))
+                os.close(fd)
+                os.unlink(probe)
+                return False
+            except OSError as probe_error:
+                if app:
+                    warn(f"cannot create a temporary replacement in {os.path.dirname(actual)}: {probe_error}")
+        if app:
+            if e.errno == errno.ETXTBSY or getattr(e, "winerror", None) in (32, 33):
+                warn(f"{os.path.basename(path)} is in use — close {app} and its background processes first")
+            elif e.errno in (errno.EACCES, errno.EPERM):
+                if not _mac_write_permission_hint(path, e):
+                    warn(f"permission denied writing {path} — use an account with write access to the installation")
+                    info("check file permissions and directory permissions for the backup")
+            else:
+                warn(f"cannot open {path} for writing")
+            warn(f"system error: {e}")
+        return True
+
+def _files_equal(first, second):
+    """Read actual bytes on every check, including same-size/mtime rewrites."""
+    with open(first, "rb") as a, open(second, "rb") as b:
+        while True:
+            chunk = a.read(1024 * 1024)
+            if chunk != b.read(1024 * 1024):
+                return False
+            if not chunk:
+                return True
+
+def _binary_backup_matches(path, bak):
+    """Recognize a pristine backup plus only our known binary replacements."""
+    replacements = []
+    try:
+        ranges, arch = executable_info(bak)
+        current_ranges, current_arch = executable_info(path)
+        if arch != current_arch or os.path.getsize(path) != os.path.getsize(bak):
+            return False
+        with mapped(bak) as saved, mapped(path) as current:
+            for gate in (CLI_GATE, MANAGER_GATE):
+                try:
+                    state, off, g = gate.resolve(saved, ranges, arch)
+                except SignatureNotFound:
+                    continue
+                if state != "unpatched":
+                    return False
+                current_state, current_off, current_gate = gate.resolve(current, current_ranges, current_arch)
+                if current_off != off or current_gate is not g:
+                    return False
+                if current_state == "patched":
+                    replacements.append((off, g.fix))
+        if not replacements:
+            return False
+        pos = 0
+        with open(bak, "rb") as saved, open(path, "rb") as current:
+            while chunk := saved.read(1024 * 1024):
+                expected = bytearray(chunk)
+                for off, fix in replacements:
+                    start, end = max(off, pos), min(off + len(fix), pos + len(chunk))
+                    if start < end:
+                        expected[start - pos:end - pos] = fix[start - off:end - off]
+                if current.read(len(chunk)) != expected:
+                    return False
+                pos += len(chunk)
+        return True
+    except (LookupError, OSError, ValueError):
+        return False
+
+def make_backup(path, binary=False):
+    """Create or refresh a verified clean backup."""
+    bak = path + BAK
+    if os.path.exists(bak):
+        if _files_equal(path, bak):
+            if not binary or not any(gate_status(bak, gate)[0] == "patched" for gate in (CLI_GATE, MANAGER_GATE)):
+                return bak
+            raise OSError("backup already contains a binary patch; restore a pristine original before applying another target")
+        if binary and _binary_backup_matches(path, bak):
+            return bak
+    if binary and any(gate_status(path, gate)[0] == "patched" for gate in (CLI_GATE, MANAGER_GATE)):
+        raise OSError("cannot verify a pristine backup for the existing binary patch; restore the original before applying another target")
+    if os.path.exists(bak):
+        info(f"backup is stale (app updated) — refreshing {os.path.basename(path)}{BAK}")
+    else:
+        info(f"backup -> {os.path.basename(path)}{BAK}")
+    shutil.copy2(path, bak)
+    if not _files_equal(path, bak):
+        raise OSError("backup verification failed")
+    return bak
+
+@contextlib.contextmanager
+def _mac_staged_binary(path):
+    """Create a private sibling inode; leave the installed binary untouched."""
+    fd, staged = tempfile.mkstemp(prefix=".agy-write-", dir=os.path.dirname(path))
+    os.close(fd)
+    try:
+        yield staged
+    finally:
+        if os.path.exists(staged):
+            os.unlink(staged)
+
+def _copy_binary(src, dst):
+    if sys.platform != "darwin":
+        shutil.copy2(src, dst)
+        return
+    dst = os.path.realpath(dst)
+    with _mac_staged_binary(dst) as staged:
+        shutil.copy2(src, staged)
+        if not filecmp.cmp(src, staged, shallow=False):
+            raise OSError("replacement copy verification failed")
+        with open(staged, "r+b") as f:
+            f.flush(); os.fsync(f.fileno())
+        os.replace(staged, dst)
+
+def restore_file(path, status=None):
+    if sys.platform == "darwin":
+        path = os.path.realpath(path)
+    b = path + BAK
+    if not os.path.exists(b):
+        warn(f"no backup for {os.path.basename(path)} (nothing to restore)")
+        return False
+    if sys.platform == "darwin":
+        app = _mac_app_bundle(path)
+        if app and os.path.basename(path) == "language_server":
+            if _mac_is_isolated_profile(app):
+                try:
+                    _desktop_namespace_credentials(b, os.path.dirname(app), check_only=True)
+                except (OSError, ValueError, LookupError) as e:
+                    warn(f"backup would break profile credential isolation — refusing to restore: {e}")
+                    return False
+    if is_locked(path, "the app"):
+        return False
+    if status:
+        try:
+            if status(b)[0] != "unpatched":
+                warn("backup is not a recognized clean build — refusing to restore")
+                return False
+        except Exception as e:
+            warn(f"couldn't validate backup: {e}"); return False
+    _copy_binary(b, path)
+    if status and status(path)[0] != "unpatched":
+        warn("restore verification failed")
+        return False
+    ok(f"restored {os.path.basename(path)}")
+    return True
+
+def rmtree_quiet(p):
+    try:
+        if os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
+    except OSError:
+        pass
+
+@contextlib.contextmanager
+def mapped(path):
+    """Yield scan data without mapping signed file pages on macOS."""
+    with open(path, "rb") as f:
+        with _scan_data(f) as data:
+            yield data
+
+@contextlib.contextmanager
+def _scan_data(f):
+    # Reading a modified signed Mach-O through mmap can cause an uncatchable
+    # CODESIGNING SIGKILL on macOS, including during post-write verification.
+    if sys.platform == "darwin":
+        f.seek(0)
+        yield f.read()
+        return
+    if os.fstat(f.fileno()).st_size == 0:
+        yield b""; return
+    mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    try: yield mm
+    finally: mm.close()
+
+def _read_exact(f, offset, size):
+    f.seek(offset)
+    data = f.read(size)
+    if len(data) != size:
+        raise ValueError("truncated executable header")
+    return data
+
+def _normalized_ranges(ranges, file_size):
+    clean = []
+    for start, end in ranges:
+        start, end = max(0, start), min(file_size, end)
+        if start < end: clean.append((start, end))
+    out = []
+    for start, end in sorted(clean):
+        if out and start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return tuple(out)
+
+def _machine_arch(machine):
+    return {0x8664: "x64", 0xaa64: "arm64", 0x3e: "x64", 0xb7: "arm64",
+            0x01000007: "x64", 0x0100000c: "arm64"}.get(machine)
+
+def _pe_executable_info(f, file_size):
+    pe = struct.unpack("<I", _read_exact(f, 0x3c, 4))[0]
+    if _read_exact(f, pe, 4) != b"PE\0\0":
+        raise ValueError("invalid PE signature")
+    coff = _read_exact(f, pe + 4, 20)
+    arch = _machine_arch(struct.unpack_from("<H", coff, 0)[0])
+    section_count = struct.unpack_from("<H", coff, 2)[0]
+    optional_size = struct.unpack_from("<H", coff, 16)[0]
+    section_table = pe + 24 + optional_size
+    ranges = []
+    for i in range(section_count):
+        section = _read_exact(f, section_table + i * 40, 40)
+        raw_size, raw_offset = struct.unpack_from("<II", section, 16)
+        characteristics = struct.unpack_from("<I", section, 36)[0]
+        if characteristics & 0x20000000:
+            ranges.append((raw_offset, raw_offset + raw_size))
+    return _normalized_ranges(ranges, file_size), arch
+
+def _elf_executable_info(f, file_size):
+    ident = _read_exact(f, 0, 16)
+    elf_class, data_order = ident[4], ident[5]
+    endian = "<" if data_order == 1 else ">" if data_order == 2 else None
+    if endian is None:
+        raise ValueError("unknown ELF byte order")
+    machine = struct.unpack(endian + "H", _read_exact(f, 18, 2))[0]
+    if elf_class == 2:
+        header = _read_exact(f, 0, 64)
+        phoff = struct.unpack_from(endian + "Q", header, 32)[0]
+        phentsize, phnum = struct.unpack_from(endian + "HH", header, 54)
+        layout = (0, 4, 8, 32, "I", "I", "Q", "Q")
+    elif elf_class == 1:
+        header = _read_exact(f, 0, 52)
+        phoff = struct.unpack_from(endian + "I", header, 28)[0]
+        phentsize, phnum = struct.unpack_from(endian + "HH", header, 42)
+        layout = (0, 24, 4, 16, "I", "I", "I", "I")
+    else:
+        raise ValueError("unknown ELF class")
+    type_off, flags_off, file_off, size_off, type_fmt, flags_fmt, off_fmt, size_fmt = layout
+    ranges = []
+    for i in range(phnum):
+        entry = _read_exact(f, phoff + i * phentsize, phentsize)
+        p_type = struct.unpack_from(endian + type_fmt, entry, type_off)[0]
+        flags = struct.unpack_from(endian + flags_fmt, entry, flags_off)[0]
+        offset = struct.unpack_from(endian + off_fmt, entry, file_off)[0]
+        size = struct.unpack_from(endian + size_fmt, entry, size_off)[0]
+        if p_type == 1 and flags & 1:
+            ranges.append((offset, offset + size))
+    return _normalized_ranges(ranges, file_size), _machine_arch(machine)
+
+def _macho_slice_info(f, file_size, base, slice_size):
+    magic = _read_exact(f, base, 4)
+    if magic == b"\xcf\xfa\xed\xfe":
+        endian = "<"
+    elif magic == b"\xfe\xed\xfa\xcf":
+        endian = ">"
+    else:
+        raise ValueError("unsupported Mach-O slice")
+    header = _read_exact(f, base, 32)
+    arch = _machine_arch(struct.unpack_from(endian + "I", header, 4)[0])
+    command_count = struct.unpack_from(endian + "I", header, 16)[0]
+    pos, ranges = base + 32, []
+    for _ in range(command_count):
+        command_header = _read_exact(f, pos, 8)
+        command, command_size = struct.unpack(endian + "II", command_header)
+        if command_size < 8 or pos + command_size > base + slice_size:
+            raise ValueError("invalid Mach-O load command")
+        if command == 0x19:
+            segment = _read_exact(f, pos, command_size)
+            section_count = struct.unpack_from(endian + "I", segment, 64)[0]
+            if 72 + section_count * 80 > command_size:
+                raise ValueError("invalid Mach-O section table")
+            section_pos = 72
+            for _ in range(section_count):
+                section = segment[section_pos:section_pos + 80]
+                section_name = section[:16].split(b"\0", 1)[0]
+                segment_name = section[16:32].split(b"\0", 1)[0]
+                size = struct.unpack_from(endian + "Q", section, 40)[0]
+                offset = struct.unpack_from(endian + "I", section, 48)[0]
+                flags = struct.unpack_from(endian + "I", section, 64)[0]
+                is_code = ((segment_name, section_name) == (b"__TEXT", b"__text") or
+                           flags & (0x80000000 | 0x00000400))
+                if is_code:
+                    ranges.append((base + offset, base + offset + size))
+                section_pos += 80
+        pos += command_size
+    return _normalized_ranges(ranges, file_size), arch
+
+def _macho_executable_info(f, file_size):
+    magic = _read_exact(f, 0, 4)
+    if magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
+        return _macho_slice_info(f, file_size, 0, file_size)
+    fat = {
+        b"\xca\xfe\xba\xbe": (">", False), b"\xbe\xba\xfe\xca": ("<", False),
+        b"\xca\xfe\xba\xbf": (">", True),  b"\xbf\xba\xfe\xca": ("<", True),
+    }.get(magic)
+    if not fat:
+        raise ValueError("unsupported Mach-O header")
+    endian, is_64 = fat
+    count = struct.unpack(endian + "I", _read_exact(f, 4, 4))[0]
+    entry_size = 32 if is_64 else 20
+    ranges, arches = [], []
+    for i in range(count):
+        entry = _read_exact(f, 8 + i * entry_size, entry_size)
+        if is_64:
+            offset, size = struct.unpack_from(endian + "QQ", entry, 8)
+        else:
+            offset, size = struct.unpack_from(endian + "II", entry, 8)
+        slice_ranges, arch = _macho_slice_info(f, file_size, offset, size)
+        ranges += slice_ranges
+        arches.append(arch)
+    known_arch = arches[0] if arches and arches[0] and all(a == arches[0] for a in arches) else None
+    return _normalized_ranges(ranges, file_size), known_arch
+
+def executable_info(path):
+    """Return executable file ranges and architecture for PE, ELF, or Mach-O."""
+    with open(path, "rb") as f:
+        file_size = os.fstat(f.fileno()).st_size
+        magic = _read_exact(f, 0, min(4, file_size))
+        if magic[:2] == b"MZ":
+            ranges, arch = _pe_executable_info(f, file_size)
+        elif magic == b"\x7fELF":
+            ranges, arch = _elf_executable_info(f, file_size)
+        else:
+            ranges, arch = _macho_executable_info(f, file_size)
+    if not ranges:
+        raise ValueError("no executable code ranges found")
+    return ranges, arch
+
+def executable_ranges(path):
+    """Return executable file ranges for PE, ELF, or Mach-O."""
+    return executable_info(path)[0]
+
+# Discovery
+@functools.lru_cache(maxsize=1)
+def _reg_install_dirs():
+    dirs = []
+    if not winreg: return dirs
+    for hive, sub in ((winreg.HKEY_CURRENT_USER,  r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+                      (winreg.HKEY_LOCAL_MACHINE,  r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+                      (winreg.HKEY_LOCAL_MACHINE,  r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")):
+        try: key = winreg.OpenKey(hive, sub)
+        except OSError: continue
+        try: cnt = winreg.QueryInfoKey(key)[0]
+        except OSError: cnt = 0
+        for i in range(cnt):
+            try:
+                s = winreg.OpenKey(key, winreg.EnumKey(key, i))
+                if "antigravity" in str(winreg.QueryValueEx(s, "DisplayName")[0]).lower():
+                    loc = winreg.QueryValueEx(s, "InstallLocation")[0]
+                    if loc: dirs.append(loc)
+            except OSError:
+                pass
+    return dirs
+
+@functools.lru_cache(maxsize=1)
+def _roots():
+    out = []
+    for v in ("LOCALAPPDATA", "ProgramW6432", "PROGRAMFILES", "PROGRAMFILES(X86)", "ProgramData", "APPDATA"):
+        p = os.environ.get(v)
+        if not p: continue
+        out += [p, os.path.join(p, "Programs")]
+    up = os.environ.get("USERPROFILE", "")
+    out += [os.path.join(up, "scoop", "apps"), os.path.join(os.environ.get("SCOOP", ""), "apps")]
+    out += _reg_install_dirs()
+    seen, roots = set(), []
+    for r in out:
+        if r and os.path.isdir(r):
+            k = os.path.normcase(os.path.realpath(r))
+            if k not in seen: seen.add(k); roots.append(r)
+    return roots
+
+def _dedup_newest(paths):
+    seen, out = set(), []
+    for p in sorted({p for p in paths if os.path.exists(p)},
+                    key=lambda x: os.path.getmtime(x), reverse=True):
+        k = os.path.normcase(os.path.realpath(p))
+        if k not in seen: seen.add(k); out.append(p)
+    return out
+
+def find_marker(rel):
+    """Find a marker below known Windows install roots."""
+    hits = []
+    for root in _roots():
+        hits += glob.glob(os.path.join(root, "*ntigravity*", rel))
+        hits += glob.glob(os.path.join(root, "*ntigravity*", "*", rel))
+        direct = os.path.join(root, rel)
+        if os.path.isfile(direct): hits.append(direct)
+    return _dedup_newest(hits)
+
+def _posix_install_roots(*launchers):
+    home = os.path.expanduser("~")
+    roots = ["/opt", "/usr/share", "/usr/lib", "/usr/local/share", "/usr/local/lib",
+             "/Applications",
+             os.path.join(home, ".local", "share"),
+             os.path.join(home, "Applications"),
+             os.path.join(home, "Downloads"), home]
+    for launcher in launchers:
+        w = shutil.which(launcher)
+        if w: roots.append(os.path.dirname(os.path.realpath(w)))
+    return roots
+
+def _posix_find(rel, *launchers):
+    """Find a marker below known POSIX install roots."""
+    hits = []
+    for root in _posix_install_roots(*launchers):
+        hits += glob.glob(os.path.join(root, "*ntigravity*", rel))
+        hits += glob.glob(os.path.join(root, "*ntigravity*", "*", rel))
+        direct = os.path.join(root, rel)
+        if os.path.isfile(direct): hits.append(direct)
+    return _dedup_newest(hits)
+
+# Binary gates; re.S lets wildcards match every displacement byte.
+class SignatureNotFound(LookupError):
+    pass
+
+class SignatureAmbiguous(LookupError):
+    pass
+
+def _unique_match(pattern, data, ranges, label, accept=None):
+    found = None
+    for start, end in ranges:
+        pos = start
+        while pos < end:
+            match = pattern.search(data, pos, end)
+            if not match:
+                break
+            if accept is not None and not accept(data, match, start, end):
+                pos = max(match.end(), match.start() + 1)
+                continue
+            if found is not None:
+                raise SignatureAmbiguous(f"{label} signature is not unique — refusing to guess")
+            found = match
+            pos = max(match.end(), match.start() + 1)
+    return found
+
+class Gate:
+    def __init__(self, sig, patched, fix, offset=0, desc="", arch=None, accept=None):
+        self.sig, self.patched = re.compile(sig, re.S), re.compile(patched, re.S)
+        self.fix, self.offset, self.desc, self.arch, self.accept = fix, offset, desc, arch, accept
+    def find(self, data, ranges=None):
+        """Return state and write offset for one unambiguous signature."""
+        search_ranges = ranges or ((0, len(data)),)
+        original = _unique_match(self.sig, data, search_ranges, "unpatched gate", self.accept)
+        patched = _unique_match(self.patched, data, search_ranges, "patched gate", self.accept)
+        if original and patched:
+            raise SignatureAmbiguous("both patched and unpatched gate signatures are present")
+        if patched:
+            return ("patched", patched.start() + self.offset)
+        if original:
+            return ("unpatched", original.start() + self.offset)
+        raise SignatureNotFound("gate signature not found (unsupported version?)")
+    def resolve(self, data, ranges=None, arch=None):
+        kind, off = self.find(data, ranges)
+        return kind, off, self
+
+class MultiGate:
+    """Select one architecture-specific gate."""
+    def __init__(self, *gates, desc=""):
+        self.gates, self.desc = gates, desc
+    def resolve(self, data, ranges=None, arch=None):
+        matches = []
+        gates = [g for g in self.gates
+                 if arch is None or getattr(g, "arch", None) is None or g.arch == arch]
+        for g in gates:
+            try:
+                matches.append(g.resolve(data, ranges, arch))
+            except SignatureNotFound:
+                pass
+        if len(matches) > 1:
+            raise SignatureAmbiguous("multiple architecture gate signatures matched")
+        if matches:
+            return matches[0]
+        raise SignatureNotFound("no architecture gate signature matched (unsupported version?)")
+
+def gate_status(path, gate):
+    try:
+        ranges, arch = executable_info(path)
+        with mapped(path) as d:
+            return (gate.resolve(d, ranges, arch)[0], None)
+    except (LookupError, OSError, ValueError):
+        return ("unknown", None)
+
+def gate_patch(path, gate, app, fname):
+    if sys.platform == "darwin":
+        path = os.path.realpath(path)
+    if is_locked(path, app):
+        return False
+    try:
+        ranges, arch = executable_info(path)
+        with mapped(path) as d:
+            kind, off, g = gate.resolve(d, ranges, arch)
+    except (LookupError, OSError, ValueError) as e:
+        warn(str(e)); return False
+    if kind == "patched":
+        ok(f"{app} already patched"); return True
+    bak = make_backup(path, binary=True)
+    try:
+        # A CLI and extension can share agy. Preserve the pristine disk backup;
+        # use a separate snapshot to rescan and roll back this operation only.
+        with tempfile.TemporaryDirectory(prefix="agy-patch-") as temp:
+            before = os.path.join(temp, "before")
+            shutil.copy2(path, before)
+            if not _files_equal(path, before):
+                raise OSError("patch snapshot verification failed")
+            if not _files_equal(before, bak) and not _binary_backup_matches(before, bak):
+                raise OSError("target changed after backup")
+            return _gate_write(path, gate, off, g, before, app)
+    except Exception as e:
+        warn(f"{app} patch failed: {e}")
+        return False
+
+def _gate_write(path, gate, off, g, before, app):
+    write_started = False
+    try:
+        if not _files_equal(path, before):
+            raise OSError("target changed after backup")
+        staging = _mac_staged_binary(path) if sys.platform == "darwin" else contextlib.nullcontext(path)
+        with staging as writable:
+            if writable != path:
+                shutil.copy2(path, writable)
+                if not _files_equal(writable, before):
+                    raise OSError("target changed while staging patch")
+            ranges, arch = executable_info(writable)
+            with open(writable, "r+b") as f:
+                with _scan_data(f) as data:
+                    current_kind, current_off, current_gate = gate.resolve(data, ranges, arch)
+                if current_kind != "unpatched" or current_off != off or current_gate is not g:
+                    raise OSError("target changed before patch write")
+                f.seek(off)
+                if writable == path:
+                    write_started = True
+                f.write(g.fix); f.flush(); os.fsync(f.fileno())
+            if writable != path:
+                with mapped(writable) as data:
+                    if gate.resolve(data, ranges, arch) != ("patched", off, g):
+                        raise OSError("staged signature verification failed")
+                ranges, arch = executable_info(path)
+                with mapped(path) as data:
+                    current = gate.resolve(data, ranges, arch)
+                if current != ("unpatched", off, g) or not _files_equal(path, before):
+                    raise OSError("target changed before patch replacement")
+                os.replace(writable, path)
+                write_started = True
+        ranges, arch = executable_info(path)
+        with mapped(path) as d:
+            final_kind, final_off, final_gate = gate.resolve(d, ranges, arch)
+        if final_kind != "patched" or final_off != off or final_gate is not g:
+            raise OSError("post-write signature verification failed")
+    except Exception as e:
+        try:
+            if write_started:
+                _copy_binary(before, path)
+            rolled_back = _files_equal(path, before)
+        except Exception:
+            rolled_back = False
+        warn(f"{app} patch failed: {e}")
+        if isinstance(e, OSError):
+            _mac_write_permission_hint(path, e)
+        warn("state before this patch restored" if rolled_back else
+             f"automatic rollback failed — restore {os.path.basename(path) + BAK} manually")
+        return False
+    _patch_success(app, g.desc, off)
+    return True
+
+# CLI eligibility screen
+# CLI 1.4.0 x64 handleAuthResult: test rcx,rcx ; je ; cmp byte[rcx+8],0 ; jne eligible ;
+# mov rax,rcx ; nop ; call IneligibilityFromResult ; spill rax/rbx/rcx at +0xe0/+0xe8/+0xf0.
+# Repeating test rcx,rcx keeps ZF=0, so jne selects eligible without changing the formatter.
+CLI_GATE_X64 = Gate(
+    rb"\x48\x85\xc9\x0f\x84....\x80\x79\x08\x00\x0f\x85....\x48\x89\xc8\x90"
+    rb"\xe8....\x48\x89\x84\x24\xe0\x00\x00\x00"
+    rb"\x48\x89\x9c\x24\xe8\x00\x00\x00\x48\x89\x8c\x24\xf0\x00\x00\x00",
+    rb"\x48\x85\xc9\x0f\x84....\x48\x85\xc9\x90\x0f\x85....\x48\x89\xc8\x90"
+    rb"\xe8....\x48\x89\x84\x24\xe0\x00\x00\x00"
+    rb"\x48\x89\x9c\x24\xe8\x00\x00\x00\x48\x89\x8c\x24\xf0\x00\x00\x00",
+    b"\x48\x85\xc9\x90", offset=9, desc="eligibility screen off (x64)", arch="x64")
+
+def _cli_arm64_context(data, match, start, end):
+    off = match.start()
+    if off - 8 < start:
+        return False
+    cbnz_x1, cbz_x0 = struct.unpack_from("<II", data, off - 8)
+    return ((cbnz_x1 & 0xff00001f) == 0xb5000001 and
+            (cbz_x0 & 0xff00001f) == 0xb4000000)
+
+# CLI 1.4.0 arm64: ldrb w2,[x0,#8] ; tbnz w2,#0,eligible ;
+# bl IneligibilityFromResult ; stp x0-x7 at +0xe8/+0xf8/+0x108/+0x118.
+# mov w2,#1 selects the existing eligible branch.
+CLI_GATE_ARM64 = Gate(
+    rb"\x02\x20\x40\x39[\x02\x22\x42\x62\x82\xa2\xc2\xe2].[\x00-\x07]\x37"
+    rb"...[\x94-\x97]\xe0\x87\x0e\xa9\xe2\x8f\x0f\xa9\xe4\x97\x10\xa9\xe6\x9f\x11\xa9",
+    rb"\x22\x00\x80\x52[\x02\x22\x42\x62\x82\xa2\xc2\xe2].[\x00-\x07]\x37"
+    rb"...[\x94-\x97]\xe0\x87\x0e\xa9\xe2\x8f\x0f\xa9\xe4\x97\x10\xa9\xe6\x9f\x11\xa9",
+    b"\x22\x00\x80\x52", desc="eligibility screen off (arm64)",
+    arch="arm64", accept=_cli_arm64_context)
+
+CLI_GATE = MultiGate(CLI_GATE_X64, CLI_GATE_ARM64, desc="eligibility screen off")
+
+
+def cli_default_paths():
+    cands = []
+    w = shutil.which("agy")
+    if w:
+        base, ext = os.path.splitext(w); cands.append(base + ext.lower())
+    if os.name == "nt":
+        for root in _roots():
+            cands += glob.glob(os.path.join(root, "agy", "bin", "agy.exe"))
+            cands += glob.glob(os.path.join(root, "agy", "*", "bin", "agy.exe"))
+            cands += glob.glob(os.path.join(root, "agy*", "agy.exe"))
+    else:
+        home = os.path.expanduser("~")
+        cands += [os.path.join(d, "agy") for d in
+                  (os.path.join(home, ".local", "bin"), os.path.join(home, "bin"),
+                   "/usr/local/bin", "/usr/bin", "/opt/homebrew/bin")]
+    return _dedup_newest(cands)
+
+# Manager auth result
+# Manager 2.19.1 Windows x64: force hasValidAuth and fall through to token attachment.
+# cmp byte[rax+8],0 ; je ; mov rdx,[rsp+0x70] ; mov [rax+0x60],rdx
+# Replacing cmp/je with mov byte[rax+8],1 ; nop*2 selects the success path.
+MANAGER_GATE_X64 = Gate(rb"\x80\x78\x08\x00\x74.\x48\x8b\x54\x24\x70\x48\x89\x50\x60",
+                        rb"\xc6\x40\x08\x01\x90\x90\x48\x8b\x54\x24\x70\x48\x89\x50\x60",
+                        b"\xc6\x40\x08\x01\x90\x90", desc="hasValidAuth=true", arch="x64")
+
+# Manager 2.19.1 Linux arm64: verified against the archive's language_server.
+# Force hasValidAuth and remove the token-attachment branch.
+#   ldrb w3,[x0,#8] ; tbz w3,#0,skip  ->  mov w3,#1 ; strb w3,[x0,#8]
+# Keep the current ldp x3,x4,[sp,#0x80] ; stp x3,x4,[x0,#0x60] context.
+# Only the tbz displacement varies; Rt=w3 and bit #0 stay fixed.
+MANAGER_GATE_ARM64 = Gate(rb"\x03\x20\x40\x39[\x03\x23\x43\x63\x83\xa3\xc3\xe3]."
+                          rb"[\x00-\x07]\x36\xe3\x13\x48\xa9\x03\x10\x06\xa9",
+                          rb"\x23\x00\x80\x52\x03\x20\x00\x39\xe3\x13\x48\xa9"
+                          rb"\x03\x10\x06\xa9",
+                          b"\x23\x00\x80\x52\x03\x20\x00\x39", desc="hasValidAuth=true (arm64)",
+                          arch="arm64")
+
+MANAGER_GATE = MultiGate(MANAGER_GATE_X64, MANAGER_GATE_ARM64, desc="hasValidAuth=true")
+
+# Extension 1.7.0 uses agy 1.3.0 --hub: its verified Windows x64 validator
+# has the same cmp/je and token-attachment instructions as Manager 2.19.1.
+# ARM64 extension builds require their own verification before enabling them.
+EXTENSION_GATE = MultiGate(MANAGER_GATE_X64, desc="hub hasValidAuth=true")
+
+def extension_default_paths():
+    return _dedup_newest([os.path.join(os.path.expanduser("~"), ".gemini", "bin", _bin("agy"))])
+
+def manager_default_bins():
+    if os.name == "nt":
+        return find_marker(os.path.join("resources", "bin", "language_server.exe"))
+    rel = (os.path.join("Contents", "Resources", "bin", "language_server") if sys.platform == "darwin"
+           else os.path.join("resources", "bin", "language_server"))
+    return _posix_find(rel, "antigravity")
+
+# IDE
+# IDE 2.5.5 macOS arm64: gate recognition reported in issue #8; JavaScript is arch-independent.
+# Replace this.<minified field>.isGoogleInternal with true after resetIsTierGCPTos().
+IDE_RE = re.compile(rb"(resetIsTierGCPTos\(\),)this\.[A-Za-z_$0-9]+\.isGoogleInternal")
+IDE_DONE = b"resetIsTierGCPTos(),true"
+IDE_DONE_RE = re.compile(re.escape(IDE_DONE))
+
+def ide_default_mains():
+    if os.name == "nt":
+        return find_marker(os.path.join("resources", "app", "out", "main.js"))
+    rel = (os.path.join("Contents", "Resources", "app", "out", "main.js") if sys.platform == "darwin"
+           else os.path.join("resources", "app", "out", "main.js"))
+    return _posix_find(rel, "antigravity-ide", "antigravity")
+
+def _ide_gate_state(data):
+    ranges = ((0, len(data)),)
+    original = _unique_match(IDE_RE, data, ranges, "unpatched IDE gate")
+    patched = _unique_match(IDE_DONE_RE, data, ranges, "patched IDE gate")
+    if original and patched:
+        raise SignatureAmbiguous("both patched and unpatched IDE gates are present")
+    if original:
+        return "unpatched"
+    if patched:
+        return "patched"
+    raise SignatureNotFound("IDE auth-gate pattern not found (unsupported version?)")
+
+def ide_status(path):
+    try:
+        with mapped(path) as d:
+            return (_ide_gate_state(d), None)
+    except (LookupError, OSError, ValueError):
+        return ("unknown", None)
+
+def _ide_cache_dirs():
+    """Return JavaScript cache directories invalidated by the patch."""
+    home = os.path.expanduser("~")
+    if os.name == "nt":
+        bases = [os.path.expandvars(p) for p in
+                 (r"%USERPROFILE%\scoop\persist\antigravity-ide\data\user-data",
+                  r"%APPDATA%\Antigravity IDE")]
+    elif sys.platform == "darwin":
+        bases = [os.path.join(home, "Library", "Application Support", "Antigravity IDE")]
+    else:
+        cfg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        bases = [os.path.join(cfg, "Antigravity IDE")]
+    dirs = []
+    for base in bases:
+        dirs += [os.path.join(base, "CachedData"),
+                 os.path.join(base, "Code Cache", "js")]
+    return dirs
+
+def ide_patch(path):
+    if is_locked(path, "Antigravity IDE"): return False
+    with open(path, "rb") as f: d = f.read()
+    try:
+        kind = _ide_gate_state(d)
+    except LookupError as e:
+        warn(str(e)); return False
+    if kind == "patched":
+        ok("IDE already patched"); return True
+    off = IDE_RE.search(d).end(1)
+    bak = make_backup(path)
+    try:
+        with open(path, "rb") as f:
+            current = f.read()
+        if current != d or _ide_gate_state(current) != "unpatched":
+            raise OSError("target changed before patch write")
+        patched, count = IDE_RE.subn(rb"\1true", current, count=1)
+        if count != 1:
+            raise OSError(f"expected one IDE gate replacement, got {count}")
+        with open(path, "wb") as f:
+            f.write(patched); f.flush(); os.fsync(f.fileno())
+        with mapped(path) as verified:
+            if _ide_gate_state(verified) != "patched":
+                raise OSError("post-write IDE signature verification failed")
+    except Exception as e:
+        try:
+            shutil.copy2(bak, path)
+            rolled_back = _files_equal(path, bak)
+        except Exception:
+            rolled_back = False
+        warn(f"IDE patch failed: {e}")
+        warn("original restored from backup" if rolled_back else
+             f"automatic rollback failed — restore {os.path.basename(bak)} manually")
+        return False
+    for c in _ide_cache_dirs(): rmtree_quiet(c)
+    _patch_success("IDE", "isGoogleInternal=true", off)
+    return True
+
+# Accounts
+# Live logins remain opaque: CLI + Manager + Extension use Credential Manager; IDE uses state.vscdb.
+ACCT_PREFIX = "agy-manager:account:"
+CRED_TARGET = "gemini:antigravity"
+CRED_USER   = "antigravity"
+IDE_KEYS = ("antigravityUnifiedStateSync.oauthToken",
+            "antigravityUnifiedStateSync.userStatus",
+            "antigravityUnifiedStateSync.profileUrl",
+            "antigravityUnifiedStateSync.modelCredits")
+
+@functools.lru_cache(maxsize=1)
+def _advapi():
+    """Bind the Windows Credential API."""
+    import ctypes
+    from ctypes import wintypes
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD),
+                    ("TargetName", wintypes.LPWSTR), ("Comment", wintypes.LPWSTR),
+                    ("LastWritten", wintypes.FILETIME), ("CredentialBlobSize", wintypes.DWORD),
+                    ("CredentialBlob", ctypes.POINTER(ctypes.c_char)), ("Persist", wintypes.DWORD),
+                    ("AttributeCount", wintypes.DWORD), ("Attributes", ctypes.c_void_p),
+                    ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+    a = ctypes.WinDLL("advapi32", use_last_error=True)
+    PCRED = ctypes.POINTER(CREDENTIAL)
+    a.CredReadW.argtypes  = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(PCRED)]
+    a.CredWriteW.argtypes = [PCRED, wintypes.DWORD]
+    a.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    a.CredEnumerateW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                 ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.POINTER(PCRED))]
+    a.CredFree.argtypes = [ctypes.c_void_p]; a.CredFree.restype = None
+    for fn in (a.CredReadW, a.CredWriteW, a.CredDeleteW, a.CredEnumerateW): fn.restype = wintypes.BOOL
+    return ctypes, wintypes, a, CREDENTIAL, PCRED
+
+def cred_read(target):
+    ctypes, wintypes, a, CRED, PCRED = _advapi()
+    p = PCRED()
+    if not a.CredReadW(target, 1, 0, ctypes.byref(p)):
+        return None
+    try:    return ctypes.string_at(p.contents.CredentialBlob, p.contents.CredentialBlobSize)
+    finally: a.CredFree(p)
+
+def cred_write(target, blob, user):
+    ctypes, wintypes, a, CRED, PCRED = _advapi()
+    buf = ctypes.create_string_buffer(blob, len(blob))
+    c = CRED(); c.Type = 1; c.TargetName = target; c.UserName = user
+    c.CredentialBlobSize = len(blob)
+    c.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))
+    c.Persist = 2
+    if not a.CredWriteW(ctypes.byref(c), 0):
+        raise OSError(f"CredWrite failed (err {ctypes.get_last_error()})")
+
+def cred_delete(target):
+    ctypes, wintypes, a, CRED, PCRED = _advapi()
+    return bool(a.CredDeleteW(target, 1, 0))
+
+def cred_enum(prefix):
+    ctypes, wintypes, a, CRED, PCRED = _advapi()
+    n = wintypes.DWORD(); arr = ctypes.POINTER(PCRED)()
+    if not a.CredEnumerateW(prefix + "*", 0, ctypes.byref(n), ctypes.byref(arr)):
+        return []
+    try:    return [arr[i].contents.TargetName for i in range(n.value)]
+    finally: a.CredFree(arr)
+
+def _ide_state_db():
+    """Return the newest IDE state database."""
+    cands = []
+    for base in (r"%USERPROFILE%\scoop\persist\antigravity-ide\data\user-data",
+                 r"%APPDATA%\Antigravity IDE"):
+        p = os.path.join(os.path.expandvars(base), "User", "globalStorage", "state.vscdb")
+        if os.path.isfile(p): cands.append(p)
+    return max(cands, key=os.path.getmtime) if cands else None
+
+def ide_read(db=None):
+    db = db or _ide_state_db()
+    if not db: return {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        placeholders = ",".join("?" for _ in IDE_KEYS)
+        rows = con.execute(f"select key,value from ItemTable where key in ({placeholders})",
+                           IDE_KEYS)
+        return dict(rows)
+    finally: con.close()
+
+def ide_write(values, db=None):
+    db = db or _ide_state_db()
+    if not db: raise OSError("IDE state.vscdb not found")
+    con = sqlite3.connect(db, timeout=2)
+    try:
+        cur = con.cursor()
+        for k in IDE_KEYS:
+            if k in values:
+                cur.execute("insert into ItemTable(key,value) values(?,?) "
+                            "on conflict(key) do update set value=excluded.value", (k, values[k]))
+            else:
+                cur.execute("delete from ItemTable where key=?", (k,))
+        con.commit()
+    finally: con.close()
+
+# Preserve SQLite value types in JSON.
+def _enc(v): return {"b": base64.b64encode(v).decode()} if isinstance(v, (bytes, bytearray)) else {"s": v}
+def _dec(d): return base64.b64decode(d["b"]) if "b" in d else d["s"]
+
+def _snapshot(target_type, ide_db=None):
+    if target_type == "cli-manager":
+        cred = cred_read(CRED_TARGET)
+        return {"version": 1, "type": "cli-manager", "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "cred": base64.b64encode(cred).decode() if cred else None}
+    elif target_type == "ide":
+        return {"version": 1, "type": "ide", "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "ide": {k: _enc(v) for k, v in ide_read(ide_db).items()}}
+    else:
+        raise ValueError(f"unknown target type {target_type}")
+
+def _apply(target_type, bundle):
+    if target_type == "cli-manager":
+        if bundle.get("cred"):
+            cred_write(CRED_TARGET, base64.b64decode(bundle["cred"]), CRED_USER)
+    elif target_type == "ide":
+        ide = {k: _dec(v) for k, v in (bundle.get("ide") or {}).items()}
+        if ide:
+            db = _ide_state_db()
+            if db:
+                ide_write(ide, db)
+            else:
+                info("IDE database not found — skipping IDE token restoration")
+
+def _ide_refresh_token(oauth_token_val):
+    if not oauth_token_val:
+        return None
+    try:
+        dec = base64.b64decode(oauth_token_val)
+    except Exception:
+        return None
+    tokens = set()
+    for match in re.finditer(rb'(?<![a-zA-Z0-9_-])[a-zA-Z0-9_-]{32,}(?![a-zA-Z0-9_-])', dec):
+        encoded = match.group(0)
+        try:
+            raw = base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4))
+        except Exception:
+            continue
+        tokens.update(m.group(0) for m in re.finditer(rb'1//[a-zA-Z0-9_-]+', raw))
+    if len(tokens) != 1:
+        return None
+    return next(iter(tokens)).decode("utf-8")
+
+def _refresh_token(target_type, bundle):
+    """Extract the refresh token used to identify a profile."""
+    if target_type == "cli-manager":
+        b64 = bundle.get("cred")
+        if not b64: return None
+        try:    return json.loads(base64.b64decode(b64)).get("token", {}).get("refresh_token")
+        except Exception: return None
+    elif target_type == "ide":
+        ide_data = bundle.get("ide") or {}
+        token_val = ide_data.get("antigravityUnifiedStateSync.oauthToken")
+        if not token_val: return None
+        try:
+            raw_val = _dec(token_val)
+            return _ide_refresh_token(raw_val)
+        except Exception:
+            return None
+    return None
+
+# Credential Manager blobs are limited to about 2560 bytes.
+_CHUNK = 2000
+
+def _acct_prefix(target_type):
+    return f"agy-manager:account:{target_type}:"
+
+def profile_names(target_type):
+    prefix = _acct_prefix(target_type)
+    return sorted({t[len(prefix):].rsplit("/", 1)[0] for t in cred_enum(prefix)})
+
+def profile_load(target_type, name):
+    prefix = _acct_prefix(target_type)
+    chunks, i = [], 0
+    while True:
+        raw = cred_read(f"{prefix}{name}/{i}")
+        if raw is None: break
+        chunks.append(raw); i += 1
+    return json.loads(b"".join(chunks)) if chunks else None
+
+def profile_bundles(target_type):
+    """Load every saved profile once for one account operation or UI render."""
+    return {name: profile_load(target_type, name) for name in profile_names(target_type)}
+
+def _profile_delete(target_type, name):
+    prefix = _acct_prefix(target_type)
+    i = n = 0
+    while cred_delete(f"{prefix}{name}/{i}"): n += 1; i += 1
+    return n
+
+def profile_save(target_type, name, bundle):
+    prefix = _acct_prefix(target_type)
+    _profile_delete(target_type, name)
+    data = json.dumps(bundle).encode("utf-8")
+    parts = [data[j:j+_CHUNK] for j in range(0, len(data), _CHUNK)] or [b""]
+    for i, part in enumerate(parts):
+        cred_write(f"{prefix}{name}/{i}", part, name)
+
+def current_account(target_type, profiles=None):
+    """Match the live refresh token to a saved profile."""
+    if target_type == "cli-manager":
+        live = cred_read(CRED_TARGET)
+        if not live: return None
+        try:    rt = json.loads(live).get("token", {}).get("refresh_token")
+        except Exception: return None
+    elif target_type == "ide":
+        db = _ide_state_db()
+        if not db: return None
+        live = ide_read(db).get("antigravityUnifiedStateSync.oauthToken")
+        if not live: return None
+        rt = _ide_refresh_token(live)
+    else:
+        return None
+
+    if not rt: return None
+    profiles = profile_bundles(target_type) if profiles is None else profiles
+    for name, b in profiles.items():
+        if b and _refresh_token(target_type, b) == rt: return name
+    return None
+
+def _accounts_busy(target_type):
+    """Return apps that may cache or lock the active login."""
+    busy = []
+    if target_type == "cli-manager":
+        for t, label in (("manager", "Manager"), ("cli", "CLI")):
+            p = resolve(t, {})
+            if p and is_locked(p): busy.append(label)
+    elif target_type == "ide":
+        db = _ide_state_db()
+        if db:
+            try:
+                con = sqlite3.connect(db, timeout=0.3)
+                try: con.execute("BEGIN IMMEDIATE"); con.rollback()
+                finally: con.close()
+            except sqlite3.OperationalError:
+                busy.append("IDE")
+    return busy
+
+def acct_list(target_type):
+    profiles = profile_bundles(target_type)
+    if not profiles:
+        info(f"no saved accounts yet - use 'accounts {target_type} save <name>'"); return 0
+    cur = current_account(target_type, profiles)
+    for n, bundle in profiles.items():
+        b = bundle or {}
+        ok(f"{'* ' if n == cur else '  '}{n}   (saved {b.get('saved_at', '?')})")
+    if cur is None:
+        info("the current live login is not saved as any profile")
+    return 0
+
+def acct_current(target_type):
+    cur = current_account(target_type)
+    (ok if cur else info)(f"active account: {cur}" if cur else "current login is not saved as a profile")
+    return 0
+
+# CLI 1.2.16/1.2.17 and Manager 2.19.1: CodeAssistClient.fetchRetrieveUserQuotaSummary
+# marshals RetrieveUserQuotaSummaryRequest as JSON and POSTs to this endpoint.
+# Public installed-app OAuth configuration also used by IDE getOAuth2Config;
+# these identify Google's shipped client, not private account credentials.
+_USAGE_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+_USAGE_OAUTH_ID = "".join(chr(c ^ 42) for c in [27, 26, 29, 27, 26, 26, 28, 26, 28, 26, 31, 19, 27, 7, 94, 71, 66, 89, 89, 67, 68, 24, 66, 24, 27, 70, 73, 88, 79, 24, 25, 31, 92, 94, 69, 70, 69, 64, 66, 30, 77, 30, 26, 25, 79, 90, 4, 75, 90, 90, 89, 4, 77, 69, 69, 77, 70, 79, 95, 89, 79, 88, 73, 69, 68, 94, 79, 68, 94, 4, 73, 69, 71])
+_USAGE_OAUTH_SECRET = "".join(chr(c ^ 42) for c in [109, 101, 105, 121, 122, 114, 7, 97, 31, 18, 108, 125, 120, 30, 18, 28, 102, 78, 102, 96, 27, 71, 102, 104, 18, 89, 114, 105, 30, 80, 28, 91, 110, 107, 76])
+_USAGE_TIMEOUT = 15
+_USAGE_MAX_RESPONSE = 1024 * 1024
+
+
+class UsageError(Exception):
+    """Only fixed, credential-free messages may cross the usage boundary."""
+
+
+class _UsageHTTPError(UsageError):
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f"usage service returned HTTP {status}")
+
+
+class _UsageNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Do not forward OAuth credentials or bearer headers to a redirected host.
+        return None
+
+
+def _usage_post(url, data, token=None):
+    headers = {"Content-Type": "application/json", "User-Agent": "antigravity"}
+    if isinstance(data, dict):
+        payload = json.dumps(data).encode("utf-8")
+    else:
+        payload = data
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        request = urllib.request.Request(url, data=payload, headers=headers)
+        opener = urllib.request.build_opener(_UsageNoRedirect())
+        with opener.open(request, timeout=_USAGE_TIMEOUT) as response:
+            raw = response.read(_USAGE_MAX_RESPONSE + 1)
+        if len(raw) > _USAGE_MAX_RESPONSE:
+            raise UsageError("usage response is too large")
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise UsageError("unsupported usage response")
+        return result
+    except urllib.error.HTTPError as e:
+        status = e.code
+        e.close()
+        raise _UsageHTTPError(status) from None
+    except (OSError, ValueError, urllib.error.URLError):
+        # Exception text and response bodies can contain tokens; never expose them.
+        raise UsageError("could not read usage service (network or response error)") from None
+
+
+def _usage_timestamp(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.timestamp() if dt.tzinfo is not None else None
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _usage_token(value):
+    return value if isinstance(value, str) and value and all(32 < ord(c) < 127 for c in value) else None
+
+
+def _usage_refresh(refresh_token):
+    if not refresh_token:
+        raise UsageError("no usable OAuth token; sign in and save this profile again")
+    payload = urllib.parse.urlencode({"client_id": _USAGE_OAUTH_ID,
+        "client_secret": _USAGE_OAUTH_SECRET, "grant_type": "refresh_token",
+        "refresh_token": refresh_token}).encode("ascii")
+    try:
+        result = _usage_post("https://oauth2.googleapis.com/token", payload)
+    except _UsageHTTPError as e:
+        if e.status in (400, 401, 403):
+            raise UsageError("OAuth refresh rejected; sign in and save this profile again") from None
+        raise UsageError(f"OAuth service returned HTTP {e.status}") from None
+    access = _usage_token(result.get("access_token"))
+    if not access:
+        raise UsageError("OAuth service did not return a usable access token")
+    return access
+
+
+def _usage_auth(target_type, bundle):
+    """Read saved credentials in memory; never install or rewrite the live login."""
+    access = refresh = expiry = None
+    try:
+        if target_type == "cli-manager":
+            credentials = json.loads(base64.b64decode(bundle.get("cred") or "", validate=True))
+            token = credentials.get("token", {})
+            access = _usage_token(token.get("access_token"))
+            refresh = _usage_token(token.get("refresh_token"))
+            expiry = _usage_timestamp(token.get("expiry"))
+        elif target_type == "ide":
+            refresh = _usage_token(_refresh_token(target_type, bundle))
+        else:
+            raise UsageError("unsupported account type")
+    except (ValueError, TypeError, AttributeError):
+        raise UsageError("saved OAuth data is unreadable; sign in and save this profile again") from None
+    return access, refresh, expiry
+
+
+def _parse_usage(response):
+    """QuotaSummaryGroup/Bucket schema recovered from quota_summary.proto in both binaries."""
+    if not isinstance(response, dict):
+        raise UsageError("unsupported quota summary response")
+    response = response.get("response", response)
+    if not isinstance(response, dict) or not isinstance(response.get("groups"), list):
+        raise UsageError("quota summary unavailable in this response")
+    groups = []
+    for i, group in enumerate(response["groups"], 1):
+        if not isinstance(group, dict) or not isinstance(group.get("buckets", []), list):
+            continue
+        label = group.get("displayName")
+        label = label if isinstance(label, str) and label.strip() else f"Quota group {i}"
+        label = "".join(c if c.isprintable() else " " for c in label)[:80]
+        windows, seen = {"5h": None, "weekly": None}, set()
+        for bucket in group.get("buckets", []):
+            if not isinstance(bucket, dict):
+                continue
+            window = bucket.get("window")
+            if not isinstance(window, str) or window not in windows:
+                continue
+            if window in seen:
+                windows[window] = None  # Ambiguous: don't silently pick one bucket.
+                continue
+            seen.add(window)
+            fraction = bucket.get("remainingFraction")
+            if (isinstance(fraction, bool) or not isinstance(fraction, (int, float))
+                    or not 0 <= fraction <= 1 or not math.isfinite(fraction)):
+                fraction = None
+            windows[window] = {"fraction": fraction,
+                               "reset": _usage_timestamp(bucket.get("resetTime")),
+                               "disabled": bucket.get("disabled") is True}
+        groups.append({"name": label, "windows": windows})
+    return groups
+
+
+def _profile_usage(target_type, bundle):
+    access, refresh, expiry = _usage_auth(target_type, bundle)
+    refreshed = False
+    if not access or (expiry is not None and expiry <= time.time() + 30):
+        access = _usage_refresh(refresh)
+        refreshed = True
+    try:
+        response = _usage_post(_USAGE_URL, {}, access)
+    except _UsageHTTPError as e:
+        if e.status != 401 or refreshed or not refresh:
+            raise
+        response = _usage_post(_USAGE_URL, {}, _usage_refresh(refresh))
+    return _parse_usage(response)
+
+
+def _usage_fingerprint(bundle):
+    data = {key: value for key, value in bundle.items() if key != "saved_at"}
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode("utf-8")).digest()
+
+
+def _usage_live_bundle(target_type):
+    if target_type == "ide":
+        db = _ide_state_db()
+        if not db:
+            return None
+        bundle = _snapshot(target_type, db)
+        oauth = bundle["ide"].get("antigravityUnifiedStateSync.oauthToken")
+        return bundle if oauth and _dec(oauth) else None
+    bundle = _snapshot(target_type)
+    return bundle if bundle.get("cred") else None
+
+
+def _usage_profiles(target_type, profiles=None):
+    """Read the live login once; None is a collision-free key for an unsaved login."""
+    profiles = dict(profile_bundles(target_type) if profiles is None else profiles)
+    live = _usage_live_bundle(target_type)
+    if live is None:
+        return profiles, None
+    refresh = _usage_token(_refresh_token(target_type, live))
+    try:
+        access = _usage_auth(target_type, live)[0] if not refresh else None
+    except UsageError:
+        access = None
+    for name, bundle in profiles.items():
+        if not bundle:
+            continue
+        if refresh and _refresh_token(target_type, bundle) == refresh:
+            return profiles, name
+        if access:
+            try:
+                if _usage_auth(target_type, bundle)[0] == access:
+                    return profiles, name
+            except UsageError:
+                pass
+    return {None: live, **profiles}, None
+
+
+def _check_usage(target_type, profiles=None):
+    profiles, current = _usage_profiles(target_type, profiles)
+    results = _collect_usage(target_type, profiles)
+    for name, result in results.items():
+        result["active"] = name == current
+    return results
+
+
+def _usage_account_label(name):
+    return "Current · unsaved" if name is None else name
+
+
+def _collect_usage(target_type, profiles):
+    def fetch(item):
+        name, bundle = item
+        result = {"groups": [], "error": None, "checked_at": time.time(),
+                  "fingerprint": _usage_fingerprint(bundle)}
+        try:
+            result["groups"] = _profile_usage(target_type, bundle)
+        except UsageError as e:
+            result["error"] = str(e)
+        except Exception:
+            result["error"] = "could not check this profile"
+        result["checked_at"] = time.time()
+        return name, result
+    # Only in-memory results for this check; no credential or quota cache on disk.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return dict(pool.map(fetch, profiles.items()))
+
+
+def _usage_cells(bucket, now, compact=False):
+    if bucket is None:
+        return "no data", "not reported"
+    fraction = bucket["fraction"]
+    quota = ("unavailable" if bucket["disabled"] else "no data" if fraction is None
+             else "0% [RATE-LIMITED]" if fraction == 0 else f"{fraction * 100:.1f}%")
+    reset = bucket["reset"]
+    if reset is None:
+        return quota, "not reported"
+    seconds = max(0, math.ceil(reset - now))
+    minutes = math.ceil(seconds / 60)
+    days, hours = divmod(minutes // 60, 24)
+    timer = (f"{days}d {hours}h" if days else f"{hours}h {minutes % 60}m" if hours
+             else f"{minutes}m" if minutes else "reset due; refresh to confirm")
+    try:
+        dt = datetime.datetime.fromtimestamp(reset, datetime.timezone.utc).astimezone()
+    except (ValueError, OverflowError, OSError):
+        return quota, "not reported"
+    if compact:
+        return quota.replace("[RATE-LIMITED]", "(limited)"), f"{timer}\n{dt:%m-%d %H:%M}"
+    local = dt.strftime("%Y-%m-%d %H:%M %z")
+    return quota, f"{timer} ({local})"
+
+
+def acct_usage(target_type, name=None):
+    # A named check reads only that profile; an all-account check loads each once.
+    if name is None:
+        profiles, cur = _usage_profiles(target_type)
+    else:
+        profiles = {name: profile_load(target_type, name)}
+        cur = current_account(target_type, profiles) if profiles[name] is not None else None
+    if name is not None and profiles[name] is None:
+        warn(f"no saved account '{name}' (see 'accounts {target_type} list')"); return 1
+    if not profiles:
+        info("no active login or saved accounts - log in to Antigravity first"); return 0
+    results = _collect_usage(target_type, profiles)
+    now = time.time()
+    for account, result in results.items():
+        info(f"{'* ' if account == cur else '  '}{_usage_account_label(account)}")
+        if result["error"]:
+            warn(result["error"]); continue
+        if not result["groups"]:
+            info("no quota data returned")
+        for group in result["groups"]:
+            info(group["name"])
+            for window, label in (("5h", "5-Hour"), ("weekly", "Weekly")):
+                quota, reset = _usage_cells(group["windows"][window], now)
+                info(f"  {label}: {quota} remaining; reset: {reset}")
+    return int(any(r["error"] for r in results.values()))
+
+
+def _startup_usage():
+    if os.name != "nt":
+        return {}
+    results = {"_errors": []}
+    for target_type in ("cli-manager", "ide"):
+        try:
+            results[target_type] = _check_usage(target_type)
+        except Exception:
+            # Credential Manager failure must not prevent patching or reveal a blob.
+            results[target_type] = {}
+            results["_errors"].append(f"could not read {target_type} accounts for startup quota check")
+    return results
+
+
+def acct_save(target_type, name):
+    if "/" in name:
+        warn("account name can't contain '/'"); return 1
+    if target_type == "cli-manager":
+        snap = _snapshot(target_type)
+        if not snap["cred"]:
+            warn("no active login found to save - log in to Antigravity first"); return 1
+    elif target_type == "ide":
+        db = _ide_state_db()
+        if not db:
+            warn("IDE database not found"); return 1
+        snap = _snapshot(target_type, db)
+        if not any(snap["ide"].values()):
+            warn("no active login found to save - log in to Antigravity IDE first"); return 1
+    profile_save(target_type, name, snap)
+    ok(f"saved current login as '{name}'"); return 0
+
+def acct_use(target_type, name):
+    profiles = profile_bundles(target_type)
+    target = profiles.get(name)
+    if target is None:
+        warn(f"no saved account '{name}' (see 'accounts {target_type} list')"); return 1
+    busy = _accounts_busy(target_type)
+    if busy:
+        warn(f"close {', '.join(busy)} first - the token is cached in memory while running"); return 1
+    cur = current_account(target_type, profiles)
+    if cur and cur != name:
+        try: profile_save(target_type, cur, _snapshot(target_type)); info(f"synced '{cur}' before switching")
+        except Exception as e: warn(f"couldn't sync '{cur}': {e}")
+    try:
+        _apply(target_type, target)
+    except sqlite3.OperationalError:
+        warn("IDE database is locked - close Antigravity IDE and retry"); return 1
+    ok(f"switched to '{name}' - (re)start Antigravity to use it"); return 0
+
+def acct_rm(target_type, name):
+    if _profile_delete(target_type, name):
+        ok(f"removed account '{name}'"); return 0
+    warn(f"no saved account '{name}'"); return 1
+
+def acct_rename(target_type, old_name, new_name):
+    if "/" in new_name:
+        warn("new name can't contain '/'"); return 1
+    profiles = profile_bundles(target_type)
+    target = profiles.get(old_name)
+    if target is None:
+        warn(f"no saved account '{old_name}'"); return 1
+    if new_name in profiles:
+        warn(f"account '{new_name}' already exists"); return 1
+    profile_save(target_type, new_name, target)
+    _profile_delete(target_type, old_name)
+    ok(f"renamed account '{old_name}' to '{new_name}'"); return 0
+
+def acct_logout(target_type):
+    """Clear the live login locally without revoking its refresh token."""
+    busy = _accounts_busy(target_type)
+    if busy:
+        warn(f"close {', '.join(busy)} first - the token is cached in memory while running"); return 1
+    cur = current_account(target_type)
+    if cur:
+        try: profile_save(target_type, cur, _snapshot(target_type)); info(f"synced '{cur}' first")
+        except Exception as e: warn(f"couldn't sync '{cur}': {e}")
+    
+    if target_type == "cli-manager":
+        cred_delete(CRED_TARGET)
+        ok("live CLI + Manager + Extension login cleared locally (NOT revoked) - launch Antigravity, "
+           "sign into the next account, then `accounts cli-manager save <name>`")
+    elif target_type == "ide":
+        try:
+            db = _ide_state_db()
+            if db:
+                ide_write({}, db)
+        except sqlite3.OperationalError:
+            warn("IDE database is locked - close Antigravity IDE and retry"); return 1
+        ok("live IDE login cleared locally (NOT revoked) - launch Antigravity IDE, "
+           "sign into the next account, then `accounts ide save <name>`")
+    return 0
+
+def _desktop_profiles_root():
+    return os.path.expanduser("~/Library/Application Support/agy-manager/profiles")
+
+# Manager 2.19.1 macOS arm64: adrp/add x3 load the fallback filename;
+# mov x4,#29 supplies its length before filepath.Join. Use a 28-byte private
+# filename instead. The ADRP displacement varies with the executable layout.
+DESKTOP_TOKEN_GATE_ARM64 = Gate(
+    rb"[\x03\x23\x43\x63\x83\xa3\xc3\xe3]..[\x90\xb0\xd0\xf0]\x63\xc8\x3d\x91"
+    rb"\xa4\x03\x80\xd2\xe3\x93\x06\xa9\xe0\x23\x01\x91\xe1\x07\x40\xb2"
+    rb"\xe2\x03\x01\xaa...[\x94-\x97]\xe1\x83\x03\xa9",
+    rb"[\x03\x23\x43\x63\x83\xa3\xc3\xe3]..[\x90\xb0\xd0\xf0]\x63\xc8\x3d\x91"
+    rb"\x84\x03\x80\xd2\xe3\x93\x06\xa9\xe0\x23\x01\x91\xe1\x07\x40\xb2"
+    rb"\xe2\x03\x01\xaa...[\x94-\x97]\xe1\x83\x03\xa9",
+    b"\x84\x03\x80\xd2", offset=8, desc="private fallback credential filename", arch="arm64")
+
+def _desktop_token_name(profile):
+    return ("agy-profile-" + hashlib.sha256(os.path.realpath(profile).encode()).hexdigest()[:16]).encode("ascii")
+
+def _desktop_token_location(data, ranges, arch):
+    if arch != "arm64" or data[:4] != b"\xcf\xfa\xed\xfe":
+        raise ValueError("credential-isolated profiles currently require verified macOS ARM64 2.19.1")
+    state, write_offset, gate = DESKTOP_TOKEN_GATE_ARM64.resolve(data, ranges, arch)
+    instruction_offset = write_offset - 8
+    segments = []
+    pos = 32
+    for _ in range(struct.unpack_from("<I", data, 16)[0]):
+        command, size = struct.unpack_from("<II", data, pos)
+        if command == 0x19:
+            vm, _, file_offset, file_size = struct.unpack_from("<QQQQ", data, pos + 24)
+            segments.append((vm, file_offset, file_size))
+        pos += size
+    instruction_addresses = [vm + instruction_offset - off for vm, off, size in segments
+                             if off <= instruction_offset < off + size]
+    if len(instruction_addresses) != 1:
+        raise ValueError("ambiguous credential constructor address")
+    adrp, add = struct.unpack_from("<II", data, instruction_offset)
+    displacement = ((adrp >> 5) & 0x7ffff) << 2 | ((adrp >> 29) & 3)
+    if displacement & (1 << 20):
+        displacement -= 1 << 21
+    address = (instruction_addresses[0] & ~0xfff) + (displacement << 12) + ((add >> 10) & 0xfff)
+    locations = [off + address - vm for vm, off, size in segments if vm <= address and address + 29 <= vm + size]
+    if len(locations) != 1:
+        raise ValueError("ambiguous credential filename address")
+    return state, write_offset, locations[0]
+
+def _desktop_namespace_credentials(path, profile, check_only=False):
+    ranges, arch = executable_info(path)
+    with mapped(path) as data:
+        state, write_offset, name_offset = _desktop_token_location(data, ranges, arch)
+        current = data[name_offset:name_offset + 29]
+    private = _desktop_token_name(profile) + b"\0"
+    if state == "patched":
+        if current != private:
+            raise ValueError("credential namespace belongs to a different profile")
+        return
+    if current != b"jetski-standalone-oauth-token":
+        raise ValueError("unsupported credential fallback filename")
+    if check_only:
+        raise ValueError("profile needs credential isolation repair — close its window, then run accounts manager repair <name>")
+    with _mac_staged_binary(path) as backup, _mac_staged_binary(path) as staged:
+        shutil.copy2(path, backup)
+        if not filecmp.cmp(path, backup, shallow=False):
+            raise OSError("credential isolation backup verification failed")
+        shutil.copy2(backup, staged)
+        with open(staged, "r+b") as f:
+            data = f.read()
+            if _desktop_token_location(data, ranges, arch) != (state, write_offset, name_offset) or data[name_offset:name_offset + 29] != current:
+                raise OSError("credential constructor changed before write")
+            f.seek(name_offset); f.write(private)
+            f.seek(write_offset); f.write(DESKTOP_TOKEN_GATE_ARM64.fix)
+            f.flush(); os.fsync(f.fileno())
+        _desktop_namespace_credentials(staged, profile, check_only=True)
+        # Rescan the installed copy before replacing it; the source is read-only.
+        with mapped(path) as data:
+            if _desktop_token_location(data, ranges, arch) != (state, write_offset, name_offset) or data[name_offset:name_offset + 29] != current or not filecmp.cmp(path, backup, shallow=False):
+                raise OSError("credential constructor changed before replacement")
+        os.replace(staged, path)
+        try:
+            _desktop_namespace_credentials(path, profile, check_only=True)
+        except Exception:
+            _copy_binary(backup, path)
+            if not filecmp.cmp(backup, path, shallow=False):
+                raise OSError("credential namespace rollback verification failed")
+            raise
+
+def _desktop_profile_path(name):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", name):
+        raise ValueError("profile names must use 1–48 lowercase letters, digits, underscores or hyphens")
+    root = _desktop_profiles_root()
+    path = os.path.join(root, name)
+    if os.path.realpath(path) != os.path.join(os.path.realpath(root), name):
+        raise ValueError("profile directory must not be a symlink")
+    return path
+
+def _desktop_profile_namespace_credentials(app, profile):
+    server = os.path.join(app, "Contents", "Resources", "bin", "language_server")
+    for path in (server, server + BAK):
+        if path == server or os.path.lexists(path):
+            if os.path.islink(path):
+                raise ValueError("profile backend and backup must not be symlinks")
+            _desktop_namespace_credentials(path, profile)
+
+def _asar_read(path):
+    with open(path, "rb") as f:
+        prefix = f.read(16)
+        if len(prefix) != 16:
+            raise ValueError("truncated ASAR header")
+        size, header_size, payload_size, json_size = struct.unpack("<4I", prefix)
+        if size != 4 or header_size != payload_size + 4 or not 0 < json_size <= payload_size - 4 <= 32 * 1024 * 1024:
+            raise ValueError("unsupported ASAR header")
+        header = json.loads(f.read(json_size))
+        f.seek(8 + header_size)
+        return header, f.read()
+
+def _asar_entry(header, name):
+    item = header
+    for part in name.split("/"):
+        item = item["files"][part]
+    if "offset" not in item or item.get("unpacked") or "link" in item:
+        raise ValueError(f"unsupported ASAR entry: {name}")
+    return item
+
+def _asar_content(header, payload, name):
+    item = _asar_entry(header, name)
+    offset, size = int(item["offset"]), item["size"]
+    if offset < 0 or size < 0 or offset + size > len(payload):
+        raise ValueError("ASAR entry outside payload")
+    data = payload[offset:offset + size]
+    integrity = item.get("integrity")
+    if integrity and (integrity.get("algorithm") != "SHA256" or
+                      hashlib.sha256(data).hexdigest() != integrity.get("hash")):
+        raise ValueError(f"ASAR integrity verification failed: {name}")
+    return data.decode("utf-8")
+
+def _asar_write(path, header, payload, replacements):
+    for name, content in replacements.items():
+        item = _asar_entry(header, name)
+        data = content.encode("utf-8")
+        item.update(offset=str(len(payload)), size=len(data))
+        block_size = 4 * 1024 * 1024
+        item["integrity"] = {"algorithm": "SHA256", "hash": hashlib.sha256(data).hexdigest(),
+                             "blockSize": block_size,
+                             "blocks": [hashlib.sha256(data[i:i + block_size]).hexdigest()
+                                        for i in range(0, len(data), block_size)]}
+        payload += data
+    raw = json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    padded = raw + b"\0" * (-len(raw) % 4)
+    pickle = struct.pack("<II", len(padded) + 4, len(raw)) + padded
+    with open(path, "wb") as f:
+        f.write(struct.pack("<II", 4, len(pickle)) + pickle + payload)
+        f.flush(); os.fsync(f.fileno())
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _desktop_profile_scripts(archive, name):
+    header, payload = _asar_read(archive)
+    scripts = {n: _asar_content(header, payload, n) for n in
+               ("dist/main.js", "dist/paths.js", "dist/languageServer.js", "dist/updater.js")}
+    if scripts["dist/main.js"].count("electron_1.app.requestSingleInstanceLock()") != 1:
+        raise ValueError("unsupported desktop instance-lock layout")
+    bootstrap = ('"use strict";\n'
+                 'const agyProfileRoot = require("path").resolve(process.resourcesPath, "../../..");\n'
+                 'process.umask(0o077);\n'
+                 'const agyProfileApp = require("electron").app;\n'
+                 'agyProfileApp.setName(' + json.dumps("Antigravity Profile " + name) + ');\n'
+                 'for (const [key, dir] of [["userData", "user-data"], ["logs", "logs"]]) {\n'
+                 '  const target = require("path").join(agyProfileRoot, dir);\n'
+                 '  require("fs").mkdirSync(target, {recursive: true, mode: 0o700});\n'
+                 '  agyProfileApp.setPath(key, target);\n'
+                 '}\n')
+    scripts["dist/main.js"] = bootstrap + scripts["dist/main.js"]
+    paths = scripts["dist/paths.js"]
+    old = "path_1.default.join(os_1.default.homedir(), '.gemini',"
+    if paths.count(old) != 5:
+        raise ValueError("unsupported desktop storage layout")
+    scripts["dist/paths.js"] = ('const agyGeminiRoot = require("path").resolve(process.resourcesPath, "../../../gemini");\n' +
+                                paths.replace(old, "path_1.default.join(agyGeminiRoot,"))
+    server = scripts["dist/languageServer.js"]
+    anchor = "        // Point the LS at the main process' host bridge server."
+    env_anchor = "        env['AGY_BROWSER_ACTIVE_PORT_FILE'] = (0, paths_1.getActivePortFilePath)();"
+    if server.count(anchor) != 1 or server.count(env_anchor) != 1:
+        raise ValueError("unsupported desktop language-server launch layout")
+    server = server.replace(anchor,
+        '        const agyRoot = require("path").resolve(process.resourcesPath, "../../..");\n'
+        '        args.push("--gemini_dir", require("path").join(agyRoot, "gemini"),\n'
+        '                  "--local_chrome_user_data_dir", require("path").join(agyRoot, "browser"));\n' + anchor)
+    # Set this after shellEnvSync: an inherited shell environment must never
+    # restore shared Keychain access. The backend's SSH detector uses file tokens.
+    server = server.replace(env_anchor, env_anchor + '\n        env["SSH_CONNECTION"] = "127.0.0.1 1234 127.0.0.1 22";')
+    server = server.replace(env_anchor, env_anchor +
+        '\n        for (const key of ["JETSKI_OAUTH_TOKEN", "JETSKI_TEST_GAIA_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]) delete env[key];')
+    scripts["dist/languageServer.js"] = server
+    updater = scripts["dist/updater.js"]
+    for function in ("initAutoUpdater", "checkForUpdates", "quitAndInstall", "applyHostUpdate", "setAutoUpdateChecking"):
+        pattern = r"(\bfunction " + function + r"\([^)]*\)\s*\{)"
+        if len(re.findall(pattern, updater)) != 1:
+            raise ValueError("unsupported desktop updater layout")
+        updater = re.sub(pattern, r"\1\n    return; // Profile copies must retain isolation changes.\n", updater)
+    scripts["dist/updater.js"] = updater
+    return header, payload, scripts
+
+def _desktop_profile_sign(app):
+    # Profile copies are self-contained. Re-sign nested code inside out as the
+    # installed source may already have modified framework signatures.
+    bundles = []
+    for base, dirs, _ in os.walk(app, followlinks=False):
+        for name in dirs:
+            path = os.path.join(base, name)
+            if not os.path.islink(path) and name.endswith((".app", ".framework")):
+                bundles.append(path)
+    mains = {os.path.realpath(_mac_bundle_main(app))}
+    for bundle in bundles:
+        main = (_mac_bundle_main(bundle) if bundle.endswith(".app") else
+                os.path.join(bundle, os.path.basename(bundle)[:-len(".framework")]))
+        mains.add(os.path.realpath(main))
+    backend_backup = os.path.join(app, "Contents", "Resources", "bin", "language_server") + BAK
+    for base, _, files in os.walk(app, followlinks=False):
+        for name in files:
+            path = os.path.join(base, name)
+            if os.path.islink(path) or (name.endswith(BAK) and path != backend_backup) or os.path.realpath(path) in mains:
+                continue
+            with open(path, "rb") as f:
+                magic = f.read(4)
+            if magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
+                         b"\xfe\xed\xfa\xce", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+                         b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"):
+                _mac_codesign(path)
+    for bundle in sorted(bundles, key=lambda p: p.count(os.sep), reverse=True):
+        if bundle.endswith(".app"):
+            with open(os.path.join(bundle, "Contents", "Info.plist"), "rb") as f:
+                identifier = plistlib.load(f)["CFBundleIdentifier"]
+            # Ad-hoc helper signatures have no Team ID and must be able to
+            # load the copied Electron framework and execute Chromium's JIT.
+            entitlements = {**_mac_entitlements(bundle), MAC_DISABLE_LIBRARY_VALIDATION: True,
+                            "com.apple.security.cs.allow-jit": True}
+            _mac_codesign(bundle, bundle=True, identifier=identifier, entitlements=entitlements)
+        else:
+            _mac_codesign(bundle, bundle=True)
+    entitlements = _mac_library_validation_entitlements(app, True)
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        identifier = plistlib.load(f)["CFBundleIdentifier"]
+    _mac_codesign(app, bundle=True, entitlements=entitlements, identifier=identifier)
+
+def desktop_profile_create(name, overrides=None):
+    profile = _desktop_profile_path(name)
+    if os.path.lexists(profile):
+        raise ValueError("profile already exists; use open to launch it")
+    source = resolve("manager", (overrides or {}).get("manager"))
+    app = _mac_app_bundle(source) if source else None
+    if not app:
+        raise ValueError("Antigravity desktop app not found (use --path-manager)")
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        plist = plistlib.load(f)
+    if plist.get("CFBundleShortVersionString") != "2.19.1":
+        raise ValueError("isolated desktop profiles currently support verified Antigravity 2.19.1 only")
+    archive = os.path.join(app, "Contents", "Resources", "app.asar")
+    header, payload, scripts = _desktop_profile_scripts(archive, name)
+    root = _desktop_profiles_root()
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    temp = tempfile.mkdtemp(prefix=".creating-", dir=root)
+    try:
+        copied = os.path.join(temp, "Antigravity.app")
+        info("creating isolated app copy (about 650 MB per profile)")
+        shutil.copytree(app, copied, symlinks=True)
+        _desktop_profile_namespace_credentials(copied, profile)
+        digest = _asar_write(os.path.join(copied, "Contents", "Resources", "app.asar"), header, payload, scripts)
+        identity = "com.parsa.agy-profile." + name
+        original_identity = plist["CFBundleIdentifier"]
+        # Electron resolves bundled helper executables using CFBundleName.
+        # Keep that vendor name; only the displayed name identifies the profile.
+        plist.update(CFBundleIdentifier=identity, CFBundleDisplayName="Antigravity Profile " + name,
+                     CFBundleURLTypes=[{"CFBundleURLName": identity, "CFBundleURLSchemes": ["antigravity-profile-" + name]}])
+        plist["ElectronAsarIntegrity"] = {"Resources/app.asar": {"algorithm": "SHA256", "hash": digest}}
+        plist.pop("ElectronTeamID", None)
+        with open(os.path.join(copied, "Contents", "Info.plist"), "wb") as f:
+            plistlib.dump(plist, f)
+        for base, dirs, _ in os.walk(copied, followlinks=False):
+            for entry in dirs:
+                helper = os.path.join(base, entry)
+                if not entry.endswith(".app") or os.path.islink(helper):
+                    continue
+                helper_info = os.path.join(helper, "Contents", "Info.plist")
+                with open(helper_info, "rb") as f:
+                    helper_plist = plistlib.load(f)
+                old_id = helper_plist["CFBundleIdentifier"]
+                if not old_id.startswith(original_identity + "."):
+                    raise ValueError("unsupported desktop helper bundle identifier")
+                helper_plist["CFBundleIdentifier"] = identity + old_id[len(original_identity):]
+                helper_plist.pop("ElectronTeamID", None)
+                with open(helper_info, "wb") as f:
+                    plistlib.dump(helper_plist, f)
+        _desktop_profile_sign(copied)
+        for directory in ("gemini", "user-data", "logs", "browser"):
+            os.mkdir(os.path.join(temp, directory), 0o700)
+        # Exclusive publication protects a concurrently created profile.
+        os.mkdir(profile, 0o700)
+        try:
+            for entry in sorted(os.listdir(temp), key=lambda n: n == "Antigravity.app"):
+                os.rename(os.path.join(temp, entry), os.path.join(profile, entry))
+        except Exception:
+            shutil.rmtree(profile)
+            raise
+        ok(f"created desktop profile '{name}' — open it and sign in separately")
+        return 0
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+def desktop_profile_open(name):
+    profile = _desktop_profile_path(name)
+    app = os.path.join(profile, "Antigravity.app")
+    if not os.path.isdir(app):
+        raise ValueError("profile not found; create it first")
+    _desktop_namespace_credentials(os.path.join(app, "Contents", "Resources", "bin", "language_server"), profile, check_only=True)
+    executable = _mac_bundle_main(app)
+    # Direct execution preserves launch environment and lets each profile's
+    # own Electron lock focus only its existing window on repeated launches.
+    env = os.environ.copy()
+    for key in ("DEV_URL", "ELECTRON_RUN_AS_NODE", "ELECTRON_OZONE_PLATFORM_HINT"):
+        env.pop(key, None)
+    child = subprocess.Popen([executable], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, umask=0o077)
+    try:
+        code = child.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        code = 0
+    if code:
+        warn(f"desktop profile failed to start (exit {code}); check its private logs")
+        return 1
+    ok(f"opened desktop profile '{name}'")
+    return 0
+
+def desktop_profile_repair(name):
+    profile = _desktop_profile_path(name)
+    app = os.path.join(profile, "Antigravity.app")
+    if os.path.realpath(app) != os.path.join(os.path.realpath(profile), "Antigravity.app"):
+        raise ValueError("profile app must not be a symlink")
+    executable = _mac_bundle_main(app)
+    result = subprocess.run(["/bin/ps", "-axo", "command="], capture_output=True, text=True, check=True)
+    if any(line.strip().startswith(app + os.sep) for line in result.stdout.splitlines()):
+        raise ValueError("close this extra profile by quitting its app (⌘Q); it is still running in the background — closing windows is not enough; keep your main app open")
+    with tempfile.TemporaryDirectory(prefix=".repair-", dir=profile) as temp:
+        copied = os.path.join(temp, "Antigravity.app")
+        shutil.copytree(app, copied, symlinks=True)
+        _desktop_profile_namespace_credentials(copied, profile)
+        _desktop_profile_sign(copied)
+        # Keep the original outside automatic cleanup until rollback succeeds.
+        recovery = tempfile.mkdtemp(prefix=".recovery-", dir=profile)
+        saved = os.path.join(recovery, "Antigravity.app")
+        try:
+            os.rename(app, saved)
+        except Exception:
+            shutil.rmtree(recovery)
+            raise
+        try:
+            os.rename(copied, app)
+            _desktop_namespace_credentials(os.path.join(app, "Contents", "Resources", "bin", "language_server"), profile, check_only=True)
+        except Exception as failure:
+            try:
+                if os.path.exists(app):
+                    shutil.rmtree(app)
+                os.rename(saved, app)
+            except Exception as rollback:
+                raise OSError(f"repair failed ({failure}); rollback failed ({rollback}); original app retained at {saved}") from rollback
+            shutil.rmtree(recovery)
+            raise
+        shutil.rmtree(recovery)
+    ok(f"repaired credential isolation for '{name}' — reopen it and sign into the other account")
+    return 0
+
+def run_desktop_accounts(argv, overrides=None):
+    if os.geteuid() == 0:
+        warn("run desktop profiles without sudo, from your normal macOS account")
+        return 2
+    try:
+        if argv == ["list"]:
+            root = _desktop_profiles_root()
+            names = sorted(n for n in os.listdir(root) if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", n) and
+                           os.path.isdir(os.path.join(_desktop_profile_path(n), "Antigravity.app"))) if os.path.isdir(root) else []
+            for name in names:
+                info(name)
+            if not names:
+                info("no desktop profiles yet — use accounts manager create <name>")
+            return 0
+        if len(argv) == 2 and argv[0] in ("create", "open", "repair"):
+            if argv[0] == "create":
+                return desktop_profile_create(argv[1], overrides)
+            return desktop_profile_repair(argv[1]) if argv[0] == "repair" else desktop_profile_open(argv[1])
+        warn("usage: accounts manager <list|create <name>|open <name>|repair <name>> (macOS)")
+        return 2
+    except (OSError, ValueError, LookupError, subprocess.SubprocessError) as e:
+        warn(f"desktop profile error: {e}")
+        return 1
+
+def run_accounts(argv, overrides=None):
+    if sys.platform == "darwin" and argv and argv[0] == "manager":
+        return run_desktop_accounts(argv[1:], overrides)
+    if os.name != "nt":
+        warn("account management is Windows-only"); return 2
+    if not argv:
+        warn("usage: accounts <cli-manager|ide> <list|save|use|rename|current|logout|rm|usage> [name1] [name2]"); return 1
+    
+    target_type = argv[0].lower()
+    if target_type not in ("cli-manager", "ide"):
+        warn(f"unknown account target '{target_type}' (choose: cli-manager | ide)")
+        warn("usage: accounts <cli-manager|ide> <list|save|use|rename|current|logout|rm|usage> [name1] [name2]"); return 1
+
+    sub = (argv[1] if len(argv) > 1 else "list").lower()
+    arg = argv[2] if len(argv) > 2 else None
+    need = lambda: (warn(f"usage: accounts {target_type} {sub} <name>"), 1)[1]
+    try:
+        if sub == "usage":
+            if len(argv) > 3:
+                warn(f"usage: accounts {target_type} usage [name]"); return 1
+            return acct_usage(target_type, arg)
+        if sub in ("list", "ls"):          return acct_list(target_type)
+        if sub in ("current", "who"):      return acct_current(target_type)
+        if sub == "save":                  return acct_save(target_type, arg) if arg else need()
+        if sub in ("use", "switch"):       return acct_use(target_type, arg)  if arg else need()
+        if sub in ("rm", "remove", "del"): return acct_rm(target_type, arg)   if arg else need()
+        if sub in ("rename", "mv"):
+            arg2 = argv[3] if len(argv) > 3 else None
+            need_rename = lambda: (warn(f"usage: accounts {target_type} {sub} <old_name> <new_name>"), 1)[1]
+            return acct_rename(target_type, arg, arg2) if (arg and arg2) else need_rename()
+        if sub in ("logout", "signout", "clear"): return acct_logout(target_type)
+    except Exception as e:
+        warn("could not check account usage" if sub == "usage" else f"accounts error: {e}"); return 1
+    warn(f"unknown accounts subcommand '{sub}' (list | current | save | use | rename | logout | rm | usage)"); return 2
+
+# Driver
+SPEC = {
+    "cli":     dict(name="Antigravity CLI",      find=cli_default_paths,     status=functools.partial(gate_status, gate=CLI_GATE),
+                    patch=functools.partial(gate_patch, gate=CLI_GATE, app="CLI", fname=_bin("agy"))),
+    "manager": dict(name="Antigravity Manager",  find=manager_default_bins,  status=functools.partial(gate_status, gate=MANAGER_GATE),
+                    patch=functools.partial(gate_patch, gate=MANAGER_GATE, app="Manager", fname=_bin("language_server"))),
+    "ide":     dict(name="Antigravity IDE",      find=ide_default_mains,     status=ide_status,     patch=ide_patch),
+    "extension": dict(name="Antigravity IDE Extension", find=extension_default_paths,
+                      status=functools.partial(gate_status, gate=EXTENSION_GATE),
+                      patch=functools.partial(gate_patch, gate=EXTENSION_GATE, app="IDE Extension", fname=_bin("agy"))),
+}
+
+
+# macOS code signing
+def _mac_app_bundle(path):
+    """Return the enclosing .app bundle, if path is inside one."""
+    cur = os.path.realpath(path)
+    if not os.path.isdir(cur):
+        cur = os.path.dirname(cur)
+    while True:
+        if cur.endswith(".app") and os.path.isdir(os.path.join(cur, "Contents")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def _mac_bundle_main(app):
+    info_path = os.path.join(app, "Contents", "Info.plist")
+    with open(info_path, "rb") as f:
+        executable = plistlib.load(f).get("CFBundleExecutable")
+    if not isinstance(executable, str) or not executable or os.path.basename(executable) != executable:
+        raise ValueError("invalid CFBundleExecutable in macOS app bundle")
+    path = os.path.join(app, "Contents", "MacOS", executable)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"app bundle executable not found: {path}")
+    return path
+
+
+def _mac_entry_kind(path):
+    if os.path.islink(path):
+        return "symlink"
+    if os.path.isdir(path):
+        return "dir"
+    if os.path.isfile(path):
+        return "file"
+    return "missing"
+
+
+def _mac_entry_digest(path):
+    h = hashlib.sha256()
+
+    def add(cur, rel):
+        kind = _mac_entry_kind(cur)
+        h.update(kind.encode() + b"\0" + rel.encode("utf-8", "surrogateescape") + b"\0")
+        if kind == "symlink":
+            h.update(os.readlink(cur).encode("utf-8", "surrogateescape"))
+        elif kind == "file":
+            h.update(str(os.stat(cur, follow_symlinks=False).st_mode & 0o7777).encode())
+            with open(cur, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+        elif kind == "dir":
+            for name in sorted(os.listdir(cur)):
+                add(os.path.join(cur, name), rel + "/" + name if rel else name)
+
+    add(path, "")
+    return h.hexdigest()
+
+
+def _mac_remove_entry(path):
+    if os.path.islink(path) or os.path.isfile(path):
+        os.unlink(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def _mac_copy_entry(src, dst):
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    kind = _mac_entry_kind(src)
+    if kind == "symlink":
+        os.symlink(os.readlink(src), dst)
+    elif kind == "dir":
+        shutil.copytree(src, dst, symlinks=True, copy_function=shutil.copy2)
+    elif kind == "file":
+        shutil.copy2(src, dst)
+
+
+def _mac_signature_relpaths(app):
+    main = os.path.relpath(_mac_bundle_main(app), app)
+    return (main, os.path.join("Contents", "_CodeSignature"),
+            os.path.join("Contents", "CodeResources"))
+
+
+def _mac_write_signature_snapshot(app, snapshot):
+    app = os.path.abspath(app)
+    payload = os.path.join(snapshot, "payload")
+    os.makedirs(payload, exist_ok=True)
+    items = []
+    for rel in _mac_signature_relpaths(app):
+        src = os.path.join(app, rel)
+        kind = _mac_entry_kind(src)
+        if kind != "missing":
+            _mac_copy_entry(src, os.path.join(payload, rel))
+        items.append({"path": rel.replace(os.sep, "/"), "kind": kind,
+                      "digest": _mac_entry_digest(src)})
+    manifest = {"version": 1, "app": app, "items": items}
+    with open(os.path.join(snapshot, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, sort_keys=True)
+        f.flush(); os.fsync(f.fileno())
+    _mac_validate_signature_snapshot(snapshot, app)
+
+
+def _mac_load_signature_snapshot(snapshot, app):
+    with open(os.path.join(snapshot, "manifest.json"), encoding="utf-8") as f:
+        manifest = json.load(f)
+    app = os.path.abspath(app)
+    if manifest.get("version") != 1 or os.path.abspath(manifest.get("app", "")) != app:
+        raise OSError("macOS signature backup belongs to a different app bundle")
+    items = manifest.get("items")
+    if not isinstance(items, list) or not items:
+        raise OSError("invalid macOS signature backup manifest")
+    for item in items:
+        rel = item.get("path", "").replace("/", os.sep)
+        dst = os.path.abspath(os.path.join(app, rel))
+        if (not rel or os.path.isabs(rel) or
+                os.path.normcase(os.path.commonpath((app, dst))) != os.path.normcase(app)):
+            raise OSError("unsafe path in macOS signature backup")
+    return manifest
+
+
+def _mac_validate_signature_snapshot(snapshot, app):
+    manifest = _mac_load_signature_snapshot(snapshot, app)
+    for item in manifest["items"]:
+        rel = item["path"].replace("/", os.sep)
+        saved = os.path.join(snapshot, "payload", rel)
+        if _mac_entry_kind(saved) != item["kind"]:
+            raise OSError("macOS signature backup type verification failed")
+        if _mac_entry_digest(saved) != item["digest"]:
+            raise OSError("macOS signature backup content verification failed")
+    return manifest
+
+
+def _mac_restore_signature_snapshot(snapshot, app):
+    manifest = _mac_validate_signature_snapshot(snapshot, app)
+    app = os.path.abspath(app)
+    for item in manifest["items"]:
+        rel = item["path"].replace("/", os.sep)
+        dst = os.path.join(app, rel)
+        _mac_remove_entry(dst)
+        if item["kind"] != "missing":
+            _mac_copy_entry(os.path.join(snapshot, "payload", rel), dst)
+            if _mac_entry_digest(dst) != item["digest"]:
+                raise OSError("restored macOS signature state failed verification")
+
+
+def _mac_bundle_patch_states(app):
+    candidates = {
+        "manager": os.path.join(app, "Contents", "Resources", "bin", "language_server"),
+        "ide": os.path.join(app, "Contents", "Resources", "app", "out", "main.js"),
+    }
+    states = {}
+    for target, path in candidates.items():
+        if os.path.isfile(path):
+            try:
+                states[target] = (SPEC[target]["status"](path)[0], path)
+            except Exception:
+                states[target] = ("unknown", path)
+    return states
+
+
+def _mac_prepare_signature_backup(app):
+    backup = app + MAC_SIGNATURE_BAK
+    states = _mac_bundle_patch_states(app)
+    clean = bool(states) and all(state == "unpatched" for state, _ in states.values())
+    if sys.platform == "darwin":
+        verify = _mac_command(["/usr/bin/codesign", "--verify", "--deep", "--strict",
+                               "--verbose=2", app], check=False)
+        display = _mac_command(["/usr/bin/codesign", "-d", "--verbose=2", app], check=False)
+        details = (display.stdout + display.stderr).lower()
+        clean = verify.returncode == 0 and "signature=adhoc" not in details
+    if os.path.isdir(backup) and not clean:
+        _mac_validate_signature_snapshot(backup, app)
+        return backup
+
+    parent = os.path.dirname(app)
+    temp = tempfile.mkdtemp(prefix=os.path.basename(app) + MAC_SIGNATURE_BAK + ".", dir=parent)
+    old = None
+    try:
+        _mac_write_signature_snapshot(app, temp)
+        if os.path.lexists(backup):
+            old = backup + f".old-{os.getpid()}-{time.time_ns()}"
+            os.replace(backup, old)
+        try:
+            os.replace(temp, backup)
+            temp = None
+        except Exception:
+            if old is not None:
+                os.replace(old, backup)
+                old = None
+            raise
+        if old is not None:
+            _mac_remove_entry(old)
+        info(f"macOS signature backup -> {os.path.basename(backup)}")
+        return backup
+    finally:
+        if temp and os.path.isdir(temp):
+            shutil.rmtree(temp, ignore_errors=True)
+
+
+def _mac_command(args, check=True):
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace")
+    if check and result.returncode:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise OSError(detail[-1] if detail else f"command failed ({result.returncode}): {args[0]}")
+    return result
+
+
+def _mac_entitlements(path):
+    result = _mac_command(["/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", path])
+    if not result.stdout.strip():
+        return {}
+    try:
+        entitlements = plistlib.loads(result.stdout.encode("utf-8"))
+    except (ValueError, ExpatError):
+        raise OSError("cannot parse macOS signing entitlements") from None
+    if not isinstance(entitlements, dict):
+        raise OSError("macOS signing entitlements must be a dictionary")
+    return entitlements
+
+
+def _mac_library_validation_entitlements(app, allow_disable=False):
+    """Plan an explicit Electron signing exception before any patch writes."""
+    framework = os.path.join(app, "Contents", "Frameworks", "Electron Framework.framework")
+    if not os.path.isdir(framework):
+        return None
+    _mac_bundle_main(app)  # Validate the executable covered by the bundle signature.
+    display = _mac_command(["/usr/bin/codesign", "-d", "--verbose=4", app])
+    details = display.stdout + display.stderr
+    flags = re.search(r"\bflags=0x([0-9a-fA-F]+)\b", details)
+    if not flags:
+        raise OSError("cannot determine Electron code-signing flags before patching")
+    # CS_RUNTIME enables Library Validation; CS_REQUIRE_LV requests it explicitly.
+    if not int(flags[1], 16) & (0x10000 | 0x2000):
+        return None
+    entitlements = _mac_entitlements(app)
+    exception = entitlements.get(MAC_DISABLE_LIBRARY_VALIDATION, False)
+    if not isinstance(exception, bool):
+        raise OSError("invalid Electron disable-library-validation entitlement")
+    if exception:
+        return None
+    framework_display = _mac_command(["/usr/bin/codesign", "-d", "--verbose=4", framework])
+    framework_details = framework_display.stdout + framework_display.stderr
+    team = re.search(r"^TeamIdentifier=(.*)$", framework_details, re.M)
+    if not team:
+        raise OSError("cannot determine Electron Framework Team ID before patching")
+    if not allow_disable:
+        raise OSError(
+            "Electron Library Validation would reject bundled frameworks after ad-hoc signing "
+            f"(Electron Framework Team ID: {team[1].strip()}; ad-hoc Team ID: none). "
+            "No patch was applied. To permit other/unsigned libraries in this app's main executable, "
+            "rerun patch with --macos-disable-library-validation")
+    return {**entitlements, MAC_DISABLE_LIBRARY_VALIDATION: True}
+
+
+def _mac_codesign(path, bundle=False, entitlements=None, identifier=None):
+    display = _mac_command(["/usr/bin/codesign", "-d", "--verbose=2", path], check=False)
+    if entitlements is not None and display.returncode:
+        raise OSError("cannot preserve Electron signing metadata before applying the Library Validation exception")
+    args = ["/usr/bin/codesign", "--force", "--sign", "-"]
+    if identifier is not None:
+        args += ["--identifier", identifier]
+    if display.returncode == 0:
+        metadata = "identifier,flags,runtime" if entitlements is not None else "identifier,entitlements,flags,runtime"
+        if identifier is not None:
+            metadata = metadata.replace("identifier,", "")
+        args.append("--preserve-metadata=" + metadata)
+    with tempfile.TemporaryDirectory(prefix="agy-macos-entitlements-") as temp:
+        if entitlements is not None:
+            if not bundle:
+                raise ValueError("Library Validation exceptions are limited to the app bundle's main executable")
+            plist = os.path.join(temp, "entitlements.plist")
+            with open(plist, "wb") as f:
+                plistlib.dump(entitlements, f)
+            args += ["--entitlements", plist]
+            warn(f"disabling Library Validation for {os.path.basename(path)} main executable only; "
+                 "this permits libraries with other or no signatures")
+        _mac_command(args + [path])
+        _mac_codesign_verify(path, bundle=bundle)
+        if entitlements is not None and _mac_entitlements(path) != entitlements:
+            raise OSError("signed macOS entitlements do not match the requested entitlements")
+
+
+def _mac_sign_transaction(entries, bundle_entitlements=None):
+    binaries = []
+    bundles = []
+    for target, path in entries.items():
+        actual = os.path.realpath(path)
+        if target in ("cli", "manager", "extension") and actual not in binaries:
+            binaries.append(actual)
+        app = _mac_app_bundle(path)
+        if app and app not in bundles:
+            bundles.append(app)
+    if not binaries and not bundles:
+        return
+
+    with tempfile.TemporaryDirectory(prefix="agy-macos-sign-") as temp:
+        binary_copies = []
+        bundle_copies = []
+        for i, path in enumerate(binaries):
+            saved = os.path.join(temp, f"binary-{i}")
+            shutil.copy2(path, saved)
+            if not _files_equal(path, saved):
+                raise OSError("temporary macOS signing backup verification failed")
+            binary_copies.append((path, saved))
+        for i, app in enumerate(bundles):
+            saved = os.path.join(temp, f"bundle-{i}")
+            os.makedirs(saved)
+            _mac_write_signature_snapshot(app, saved)
+            bundle_copies.append((app, saved))
+        try:
+            for path in binaries:
+                _mac_codesign(path)
+            for app in bundles:
+                entitlements = (bundle_entitlements or {}).get(app)
+                if entitlements is None:
+                    _mac_codesign(app, bundle=True)
+                else:
+                    _mac_codesign(app, bundle=True, entitlements=entitlements)
+            for path in binaries:
+                ok(f"ad-hoc signed {os.path.basename(path)}")
+            for app in bundles:
+                ok(f"ad-hoc signed {os.path.basename(app)}")
+        except Exception:
+            restore_errors = []
+            for path, saved in binary_copies:
+                try:
+                    _copy_binary(saved, path)
+                except Exception as e:
+                    restore_errors.append(str(e))
+            for app, saved in bundle_copies:
+                try:
+                    _mac_restore_signature_snapshot(saved, app)
+                except Exception as e:
+                    restore_errors.append(str(e))
+            if restore_errors:
+                raise OSError("macOS signing failed and its temporary state could not be restored: " +
+                              "; ".join(restore_errors))
+            raise
+
+
+def _mac_restore_bundle_signature(app):
+    backup = app + MAC_SIGNATURE_BAK
+    if not os.path.isdir(backup):
+        raise OSError(f"macOS signature backup not found: {backup}")
+    with tempfile.TemporaryDirectory(prefix="agy-macos-restore-") as temp:
+        _mac_write_signature_snapshot(app, temp)
+        try:
+            _mac_restore_signature_snapshot(backup, app)
+            _mac_codesign_verify(app, bundle=True)
+        except Exception:
+            _mac_restore_signature_snapshot(temp, app)
+            raise
+
+
+def _mac_codesign_verify(path, bundle=False):
+    args = ["/usr/bin/codesign", "--verify"]
+    if bundle:
+        args.append("--deep")
+    args += ["--strict", "--verbose=2", path]
+    _mac_command(args)
+
+
+def _mac_xattr(action, path, attribute=None, value=None):
+    """Use Python xattr APIs when available, otherwise the macOS system tool."""
+    native = getattr(os, action + "xattr", None)
+    if native is not None:
+        args = [path]
+        if attribute is not None:
+            args.append(attribute)
+        if value is not None:
+            args.append(value)
+        return native(*args, follow_symlinks=False)
+    # Hex transport preserves arbitrary bytes for rollback; -s never follows links.
+    args = ["/usr/bin/xattr", "-s"]
+    if action == "get":
+        args += ["-p", "-x", attribute]
+    elif action == "remove":
+        args += ["-d", attribute]
+    elif action == "set":
+        args += ["-w", "-x", attribute, value.hex()]
+    elif action != "list":
+        raise ValueError("unsupported xattr operation")
+    result = _mac_command(args + [os.path.abspath(path)])
+    if action == "list":
+        return result.stdout.splitlines()
+    if action == "get":
+        return bytes.fromhex(result.stdout)
+
+
+def _mac_remove_quarantine(entries):
+    roots = []
+    for path in entries.values():
+        root = _mac_app_bundle(path) or os.path.realpath(path)
+        if root not in roots:
+            roots.append(root)
+    attribute = "com.apple.quarantine"
+    found = []
+    counts = {root: 0 for root in roots}
+
+    def walk_error(error):
+        raise error
+
+    for root in roots:
+        candidates = [root]
+        if root.endswith(".app"):
+            for base, dirs, files in os.walk(root, onerror=walk_error, followlinks=False):
+                candidates += [os.path.join(base, name) for name in dirs + files
+                               if not os.path.islink(os.path.join(base, name))]
+        for path in candidates:
+            attrs = _mac_xattr("list", path)
+            if attribute in attrs:
+                found.append((root, path, _mac_xattr("get", path, attribute)))
+
+    removed = []
+    try:
+        for root, path, value in found:
+            _mac_xattr("remove", path, attribute)
+            removed.append((path, value))
+            counts[root] += 1
+    except Exception:
+        restore_errors = []
+        for path, value in reversed(removed):
+            try:
+                _mac_xattr("set", path, attribute, value)
+            except Exception as e:
+                restore_errors.append(str(e))
+        if restore_errors:
+            raise OSError("quarantine removal failed and could not be rolled back: " +
+                          "; ".join(restore_errors))
+        raise
+    for root, count in counts.items():
+        if count:
+            ok(f"quarantine removed from {os.path.basename(root)} ({count} item(s))")
+
+def resolve(target, override):
+    if override: return override if os.path.exists(override) else None
+    for p in SPEC[target]["find"]():
+        if p and os.path.exists(p): return p
+    return None
+
+
+def _mac_prepare_apps(paths, signing_entitlements=None, disable_library_validation=False):
+    failures = {}
+    seen = set()
+    for path in paths.values():
+        if not path:
+            continue
+        app = _mac_app_bundle(path)
+        if not app or app in seen:
+            continue
+        seen.add(app)
+        try:
+            entitlements = None
+            if signing_entitlements is not None:
+                entitlements = _mac_library_validation_entitlements(app, disable_library_validation)
+            _mac_prepare_signature_backup(app)
+            if entitlements is not None:
+                signing_entitlements[app] = entitlements
+        except Exception as e:
+            failures[app] = str(e)
+    return failures
+
+
+def _mac_run_patch(targets, overrides, disable_library_validation=False):
+    rc = 0
+    paths = {t: resolve(t, overrides.get(t)) for t in targets}
+    signing_entitlements = {}
+    app_failures = _mac_prepare_apps(paths, signing_entitlements, disable_library_validation)
+    successful = {}
+    changed = []
+    for t in targets:
+        spec = SPEC[t]; path = paths[t]
+        print(f"\n=== {spec['name']} ({t}) ===")
+        if not path:
+            warn("not found (use --path-%s to point at it)" % t); continue
+        print(f"  target: {path}")
+        app = _mac_app_bundle(path)
+        if app in app_failures:
+            warn(f"macOS signing preparation failed: {app_failures[app]}")
+            rc = 1; continue
+        try:
+            before = spec["status"](path)[0]
+            if not spec["patch"](path):
+                rc = 1; continue
+            successful[t] = path
+            if before == "unpatched" and spec["status"](path)[0] == "patched":
+                changed.append((t, path))
+        except Exception as e:
+            warn(f"error: {e}"); rc = 1
+
+    if successful:
+        try:
+            if signing_entitlements:
+                _mac_sign_transaction(successful, bundle_entitlements=signing_entitlements)
+            else:
+                _mac_sign_transaction(successful)
+        except Exception as e:
+            warn(f"macOS code signing failed: {e}")
+            for target, path in reversed(changed):
+                if not restore_file(path, SPEC[target]["status"]):
+                    warn(f"automatic rollback failed for {path}")
+            return 1
+        try:
+            _mac_remove_quarantine(successful)
+        except Exception as e:
+            warn(f"couldn't remove macOS quarantine: {e}"); rc = 1
+    return rc
+
+
+def _mac_is_isolated_profile(app):
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        return plistlib.load(f).get("CFBundleIdentifier", "").startswith(
+            "com.parsa.agy-profile.")
+
+
+def _mac_run_restore(targets, overrides):
+    with tempfile.TemporaryDirectory(prefix="agy-profile-restore-") as temp:
+        return _mac_run_restore_impl(targets, overrides, temp)
+
+
+def _mac_run_restore_impl(targets, overrides, temp):
+    rc = 0
+    paths = {t: resolve(t, overrides.get(t)) for t in targets}
+    app_failures = _mac_prepare_apps(paths)
+    profiles = {}
+    for path in paths.values():
+        app = _mac_app_bundle(path) if path else None
+        if app and app not in app_failures and app not in profiles:
+            try:
+                profiles[app] = _mac_is_isolated_profile(app)
+            except Exception as e:
+                app_failures[app] = str(e)
+    restored = {}
+    previous = {}
+    touched_apps = []
+    for t in targets:
+        spec = SPEC[t]; path = paths[t]
+        print(f"\n=== {spec['name']} ({t}) ===")
+        if not path:
+            warn("not found (use --path-%s to point at it)" % t); continue
+        print(f"  target: {path}")
+        app = _mac_app_bundle(path)
+        if app in app_failures:
+            warn(f"macOS signature backup failed: {app_failures[app]}")
+            rc = 1; continue
+        try:
+            if spec["status"](path)[0] == "patched":
+                if profiles.get(app):
+                    saved = os.path.join(temp, str(len(previous)))
+                    _copy_binary(path, saved)
+                    previous[path] = saved
+                if not restore_file(path, spec["status"]):
+                    rc = 1; continue
+                if app and app not in touched_apps:
+                    touched_apps.append(app)
+                if app:
+                    restored.setdefault(app, {})[t] = path
+            else:
+                warn("not patched — skipping restore (backup may be a different build)")
+        except Exception as e:
+            warn(f"error: {e}"); rc = 1
+
+    for app in touched_apps:
+        states = _mac_bundle_patch_states(app)
+        remaining = {target: path for target, (state, path) in states.items()
+                     if state == "patched"}
+        try:
+            if profiles.get(app):
+                # A copied profile has its own locally signed backend, ASAR
+                # and helpers. Its pre-restore seal describes patched bytes;
+                # sign the restored files and reseal, even on partial restore.
+                _mac_sign_transaction({**remaining, **restored[app]})
+            elif remaining:
+                _mac_sign_transaction(remaining)
+            else:
+                _mac_restore_bundle_signature(app)
+                ok(f"original signature restored for {os.path.basename(app)}")
+        except Exception as e:
+            warn(f"macOS signature restore failed: {e}"); rc = 1
+            if profiles.get(app):
+                # Signing restores its signature snapshots on failure. Put
+                # the original binaries back too so their seal matches and
+                # the profile stays runnable and the restore can be retried.
+                for path in reversed(list(restored[app].values())):
+                    try:
+                        _copy_binary(previous[path], path)
+                    except Exception as rollback:
+                        warn(f"profile restore rollback failed: {rollback}")
+                        recovery = tempfile.mkdtemp(prefix=".restore-recovery-", dir=os.path.dirname(app))
+                        saved = os.path.join(recovery, os.path.basename(path))
+                        os.replace(previous[path], saved)
+                        warn(f"original profile binary retained at {saved}")
+    return rc
+
+
+def run(action, targets, overrides, macos_disable_library_validation=False):
+    if sys.platform == "darwin" and action == "patch":
+        if macos_disable_library_validation:
+            return _mac_run_patch(targets, overrides, disable_library_validation=True)
+        return _mac_run_patch(targets, overrides)
+    if sys.platform == "darwin" and action == "restore":
+        return _mac_run_restore(targets, overrides)
+    rc = 0
+    for t in targets:
+        spec = SPEC[t]; path = resolve(t, overrides.get(t))
+        print(f"\n=== {spec['name']} ({t}) ===")
+        if not path:
+            warn("not found (use --path-%s to point at it)" % t); continue
+        print(f"  target: {path}")
+        try:
+            if action == "status":
+                st, _ = spec["status"](path); ok(f"status: {st}")
+            elif action == "patch":
+                if not spec["patch"](path): rc = 1
+            elif action == "restore":
+                if spec["status"](path)[0] == "patched":
+                    if not restore_file(path, spec["status"]): rc = 1
+                else:
+                    warn("not patched — skipping restore (backup may be a different build)")
+        except Exception as e:
+            warn(f"error: {e}"); rc = 1
+    return rc
+
+def _status_of(t, path):
+    if not path: return "not found"
+    try:
+        return SPEC[t]["status"](path)[0]
+    except Exception:
+        return "error"
+
+def state(t, overrides=None):
+    path = resolve(t, (overrides or {}).get(t))
+    return path, _status_of(t, path)
+
+def scan(overrides):
+    """Resolve and scan all targets concurrently."""
+    _reg_install_dirs.cache_clear(); _roots.cache_clear()
+    _roots()
+    def one(t):
+        p = resolve(t, overrides.get(t))
+        return t, p, _status_of(t, p)
+    paths, status = {}, {}
+    with ThreadPoolExecutor(max_workers=len(TARGETS)) as ex:
+        for t, p, st in ex.map(one, TARGETS):
+            paths[t], status[t] = p, st
+    return paths, status
+
+# Interactive UI
+_STYLE = {"patched": "bold green", "unpatched": "yellow", "unknown": "magenta",
+          "not found": "dim", "error": "bold red"}
+_ICON  = {"patched": "✓", "unpatched": "●", "unknown": "?", "not found": "·", "error": "!"}
+
+def _render(console, paths, status):
+    from rich.table import Table
+    from rich.panel import Panel
+    cur_cli_manager = None
+    cur_ide = None
+    if os.name == "nt":
+        try:
+            cur_cli_manager = current_account("cli-manager")
+            cur_ide = current_account("ide")
+        except Exception:
+            pass
+
+    tbl = Table(box=None, expand=True, pad_edge=False)
+    tbl.add_column("App", style="bold cyan", no_wrap=True)
+    tbl.add_column("Status", no_wrap=True)
+    tbl.add_column("Account", style="bold green", no_wrap=True)
+    tbl.add_column("Location", style="dim", no_wrap=True, overflow="ellipsis", ratio=1)
+    
+    for t in ("cli", "manager", "extension", "ide"):
+        path, st = paths[t], status[t]
+        acct = cur_cli_manager if t in ("cli", "manager", "extension") else cur_ide if t == "ide" else None
+        acct_str = acct if acct else "[white dim]—[/]"
+        tbl.add_row(SPEC[t]["name"], f"[{_STYLE[st]}]{_ICON[st]} {st}[/]", acct_str, path or "—")
+        
+    console.print(Panel(tbl, title="[bold white]agy-manager[/] · Antigravity environment manager",
+                        subtitle="[dim]↑↓ move · enter select · space toggle[/]", border_style="cyan"))
+
+def _render_usage(console, results, label, cur=None):
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    if not results:
+        return
+    now = time.time()
+    group_names = list(dict.fromkeys(group["name"] for result in results.values()
+                                    for group in result["groups"]))
+    tbl = Table(box=None, expand=True, pad_edge=False)
+    tbl.add_column("Account", style="bold white", ratio=1)
+    for i, name in enumerate(group_names):
+        color = "bright_cyan" if i % 2 == 0 else "bright_magenta"
+        tbl.add_column(Text(f"{name}\n5h / weekly", style=f"bold {color}"), ratio=2)
+    if not group_names:
+        tbl.add_column("Quota status", ratio=2)
+    tbl.add_column("Checked", width=8)
+    for account, result in results.items():
+        cells = []
+        for name in group_names:
+            matches = [group for group in result["groups"] if group["name"] == name]
+            group = matches[0] if len(matches) == 1 else None
+            cell = Text()
+            for i, window in enumerate(("5h", "weekly")):
+                if i:
+                    cell.append(" / ")
+                bucket = group["windows"][window] if group is not None else None
+                quota = _usage_cells(bucket, now, compact=True)[0]
+                fraction = (bucket["fraction"]
+                            if bucket is not None and not bucket["disabled"] else None)
+                style = ("white" if fraction is None else "bold red" if fraction == 0
+                         else "bold yellow" if fraction <= .2 else "bold green")
+                cell.append(quota, style=style)
+            cells.append(cell)
+        if result["error"] or not result["groups"]:
+            message = result["error"] or "No quota data"
+            cells = [Text(message, style="red" if result["error"] else "yellow")]
+            cells.extend(Text("—") for _ in range(max(0, len(group_names) - 1)))
+        account_text = Text(_usage_account_label(account), style="bold white")
+        if result.get("active", account == cur):
+            account_text.append(" ●", style="bold green")
+        checked = time.strftime("%H:%M:%S", time.localtime(result["checked_at"]))
+        tbl.add_row(account_text, *cells, checked)
+    title = Text()
+    title.append("Quotas", style="bold white")
+    title.append(f" · {label}", style="cyan")
+    console.print(Panel(tbl, title=title,
+                        title_align="left", border_style="cyan",
+                        subtitle=Text("Remaining: 5h / weekly", style="white")))
+
+
+def _accounts_submenu(console, qs, target_type, usage=None):
+    import questionary
+    from rich.table import Table
+    from rich.panel import Panel
+    label = "CLI + Manager + Extension" if target_type == "cli-manager" else "IDE"
+    if usage is None:
+        usage = {}
+
+    def load_profiles():
+        profiles = profile_bundles(target_type)
+        quota_profiles, cur = _usage_profiles(target_type, profiles)
+        return profiles, quota_profiles, cur
+
+    while True:
+        _clear_tui(console)
+        try:
+            profiles, quota_profiles, cur = _tui_run(console, "Loading accounts…", load_profiles)
+            names = list(profiles)
+        except Exception as e:
+            console.print(f"[bold red]accounts error:[/] {e}")
+            _tui_ask(console, questionary.press_any_key_to_continue("Enter to continue…", style=qs)); return
+        tbl = Table(box=None, expand=True, pad_edge=False)
+        tbl.add_column("Account", style="bold cyan"); tbl.add_column("", style="bold green", no_wrap=True)
+        if names:
+            for n in names: tbl.add_row(n, "● active" if n == cur else "")
+        else:
+            tbl.add_row("[dim]— none saved —[/]", "")
+        console.print(Panel(tbl, title=f"[bold white]accounts ({label})[/] · switch login",
+                            border_style="cyan"))
+        if None in quota_profiles:
+            console.print("Current login is unsaved; its quotas are available below or via Check usage / quota.")
+        # A newly saved, renamed or externally changed profile must not inherit old quotas.
+        snapshots = {result["fingerprint"]: result for result in usage.values()}
+        if cur in quota_profiles and cur not in usage:
+            fingerprint = _usage_fingerprint(quota_profiles[cur])
+            if fingerprint in snapshots:
+                usage[cur] = dict(snapshots[fingerprint])
+        for name in list(usage):
+            if name not in quota_profiles or usage[name]["fingerprint"] != _usage_fingerprint(quota_profiles[name]):
+                del usage[name]
+            else:
+                usage[name]["active"] = name == cur
+        _render_usage(console, usage, label, cur)
+        act = _tui_ask(console, questionary.select("Accounts:", style=qs, qmark="»", choices=[
+            questionary.Choice("Check usage / quota", "usage"),
+            questionary.Choice("Save current login as…", "save"),
+            questionary.Choice("Switch to…", "use"),
+            questionary.Choice("Rename…", "rename"),
+            questionary.Choice("Sign out locally", "logout"),
+            questionary.Choice("Remove…", "rm"),
+            questionary.Choice("Back", "back"),
+        ]))
+        if act in (None, "back"): return
+        _clear_tui(console)
+        console.rule(f"[bold cyan]{act}[/]")
+        if act == "usage":
+            refreshed = _tui_run(console, "Refreshing account quotas…", _collect_usage, target_type, quota_profiles)
+            for name, result in refreshed.items():
+                result["active"] = name == cur
+            usage.clear(); usage.update(refreshed)
+            _render_usage(console, usage, label, cur)
+            if not quota_profiles:
+                console.print("[yellow]No active login or saved accounts.[/]")
+        elif act == "save":
+            name = _tui_ask(console, questionary.text("Name for this account:", style=qs))
+            if name and name.strip():
+                _tui_run(console, "Saving account…", acct_save, target_type, name.strip())
+        elif act == "logout":
+            _tui_run(console, "Signing out…", acct_logout, target_type)
+        elif act == "use":
+            if not names: console.print("[yellow]Nothing saved yet.[/]")
+            else:
+                choices = [questionary.Choice(n, n) for n in names] + [questionary.Choice("Back", "back")]
+                name = _tui_ask(console, questionary.select("Switch to:", style=qs, choices=choices))
+                if name and name != "back":
+                    _tui_run(console, "Switching account…", acct_use, target_type, name)
+        elif act == "rename":
+            if not names: console.print("[yellow]Nothing saved yet.[/]")
+            else:
+                choices = [questionary.Choice(n, n) for n in names] + [questionary.Choice("Back", "back")]
+                old_name = _tui_ask(console, questionary.select("Select account to rename:", style=qs, choices=choices))
+                if old_name and old_name != "back":
+                    new_name = _tui_ask(console, questionary.text(f"New name for '{old_name}':", style=qs))
+                    if new_name and new_name.strip():
+                        _tui_run(console, "Renaming account…", acct_rename, target_type, old_name, new_name.strip())
+        elif act == "rm":
+            if not names: console.print("[yellow]Nothing to remove.[/]")
+            else:
+                choices = [questionary.Choice(n, n) for n in names] + [questionary.Choice("Back", "back")]
+                name = _tui_ask(console, questionary.select("Remove:", style=qs, choices=choices))
+                if name and name != "back":
+                    _tui_run(console, "Removing account…", acct_rm, target_type, name)
+        _tui_ask(console, questionary.press_any_key_to_continue("Enter to continue…", style=qs))
+
+def _accounts_menu(console, qs, usage=None, overrides=None):
+    import questionary
+    if sys.platform == "darwin":
+        while True:
+            _clear_tui(console)
+            act = _tui_ask(console, questionary.select("Desktop account profiles:", style=qs, choices=[
+                questionary.Choice("List profiles", "list"),
+                questionary.Choice("Create isolated profile", "create"),
+                questionary.Choice("Open profile", "open"),
+                questionary.Choice("Repair profile login isolation", "repair"),
+                questionary.Choice("Back", "back"),
+            ]))
+            if act in (None, "back"):
+                return
+            args = [act]
+            if act != "list":
+                name = _tui_ask(console, questionary.text("Profile name (lowercase letters, digits, - or _):", style=qs))
+                if not name:
+                    continue
+                args.append(name.strip())
+            _tui_run(console, "Updating desktop profile…", run_desktop_accounts, args, overrides)
+            _tui_ask(console, questionary.press_any_key_to_continue("Enter to continue…", style=qs))
+    if os.name != "nt":
+        console.print("[yellow]Account management is Windows-only.[/]")
+        _tui_ask(console, questionary.press_any_key_to_continue("Enter to continue…", style=qs)); return
+    if usage is None:
+        usage = {}
+    while True:
+        _clear_tui(console)
+        act = _tui_ask(console, questionary.select("Manage accounts for:", style=qs, qmark="»", choices=[
+            questionary.Choice("CLI + Manager + Extension", "cli-manager"),
+            questionary.Choice("IDE", "ide"),
+            questionary.Choice("Back", "back"),
+        ]))
+        if act in (None, "back"): return
+        _accounts_submenu(console, qs, act, usage.setdefault(act, {}))
+
+class _TuiSessionOutput:
+    """The interactive session owns the alternate screen, not each question."""
+    def __init__(self, output):
+        self.output = output
+
+    def __getattr__(self, name):
+        return getattr(self.output, name)
+
+    def enter_alternate_screen(self):
+        pass
+
+    def quit_alternate_screen(self):
+        pass
+
+
+class _TuiDisplay:
+    """Retain Rich renderables; prompt_toolkit owns the screen while asking."""
+    def __init__(self, console, output=None):
+        import threading
+        self.console = console
+        self.output = output
+        self.items = []
+        self._cache = None
+        self.follow_tail = False
+        self._revision = 0
+        self._lock = threading.RLock()
+
+    def print(self, *objects, **kwargs):
+        with self._lock:
+            self.items.append((objects, kwargs))
+            self._revision += 1
+            self._cache = None
+
+    def rule(self, title="", **kwargs):
+        from rich.rule import Rule
+        self.print(Rule(title, **kwargs))
+
+    def clear(self):
+        with self._lock:
+            self.items.clear()
+            self._revision += 1
+            self._cache = None
+            self.follow_tail = False
+
+    def formatted(self, width):
+        import io
+        from rich.console import Console
+        from prompt_toolkit.formatted_text import ANSI, to_formatted_text
+        with self._lock:
+            if self._cache is not None and self._cache[0] == width:
+                return self._cache[1]
+            items, revision = list(self.items), self._revision
+        buffer = io.StringIO()
+        # Set both dimensions: Rich otherwise ignores an explicit width
+        # when the parent process declares TERM=dumb.
+        renderer = Console(file=buffer, width=max(1, width), height=self.console.height, force_terminal=True,
+                           color_system="truecolor", legacy_windows=False)
+        for objects, kwargs in items:
+            renderer.print(*objects, **kwargs)
+        text = to_formatted_text(ANSI(buffer.getvalue().rstrip("\n")))
+        with self._lock:
+            if self._revision == revision:
+                self._cache = width, text
+        return text
+
+
+def _tui_ask(console, question, operations=None):
+    operations = operations or {}
+    if not isinstance(console, _TuiDisplay):
+        answer = question.ask()
+        if operations and answer in operations:
+            message, callback = operations[answer]
+            with console.status(message): callback()
+        return answer
+    import asyncio
+    from prompt_toolkit.formatted_text import fragment_list_to_text
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.key_binding import ConditionalKeyBindings, KeyBindings, merge_key_bindings
+    from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.dimension import Dimension
+    app = question.application
+    if console.output is not None:
+        app.output = app.renderer.output = console.output
+    menu = app.layout.container
+    focus = app.layout.current_control
+    scroll = None
+    loading = {}
+
+    def header_text():
+        return console.formatted(app.output.get_size().columns)
+
+    def menu_height():
+        if loading:
+            return 1
+        size = app.output.get_size()
+        return min(size.rows, menu.preferred_height(size.columns, size.rows).preferred)
+
+    def header_metrics():
+        text = fragment_list_to_text(header_text())
+        lines = text.count("\n") + 1 if text else 0
+        available = max(0, app.output.get_size().rows - menu_height())
+        hint = int(lines > available and available > 1)
+        return lines, min(lines, available - hint), hint
+
+    def scroll_position():
+        lines, height, _ = header_metrics()
+        limit = max(0, lines - height)
+        return min(limit, max(0, scroll)) if scroll is not None else limit if console.follow_tail else 0
+
+    bindings = KeyBindings()
+
+    @bindings.add("c-c", eager=True)
+    def cancel(event):
+        event.app.exit(exception=KeyboardInterrupt)
+
+    @bindings.add("<any>", filter=Condition(lambda: bool(loading)))
+    def ignore_while_loading(event):
+        pass
+
+    @bindings.add("pageup")
+    @bindings.add("pagedown")
+    def scroll_header(event):
+        nonlocal scroll
+        step = max(1, header_metrics()[1] - 1)
+        scroll = scroll_position() + (-step if event.key_sequence[0].key == "pageup" else step)
+
+    header = FormattedTextControl(header_text, show_cursor=False,
+                                 get_cursor_position=lambda: Point(0, scroll_position()))
+    indicator = FormattedTextControl(
+        lambda: loading["display"].formatted(app.output.get_size().columns) if loading else [],
+        focusable=True, show_cursor=False)
+
+    app.layout = Layout(HSplit([
+        Window(header, height=lambda: Dimension.exact(header_metrics()[1]),
+               get_vertical_scroll=lambda _: scroll_position(), always_hide_cursor=True),
+        Window(FormattedTextControl("PgUp/PgDn: scroll tables and results", style="class:instruction"),
+               height=lambda: Dimension.exact(header_metrics()[2])),
+        ConditionalContainer(HSplit([menu], height=lambda: Dimension.exact(menu_height())),
+                             filter=Condition(lambda: not loading)),
+        ConditionalContainer(Window(indicator, height=1, always_hide_cursor=True),
+                             filter=Condition(lambda: bool(loading))),
+        Window(),
+    ]), focused_element=focus)
+    app.full_screen = app.renderer.full_screen = True
+    app.key_bindings = merge_key_bindings([
+        ConditionalKeyBindings(app.key_bindings, filter=Condition(lambda: not loading)), bindings])
+    app.min_redraw_interval = .03
+    app.terminal_size_polling_interval = .1
+    exit_question = app.exit
+
+    async def animate():
+        while loading:
+            loading["display"]._cache = None
+            app.invalidate()
+            await asyncio.sleep(.08)
+
+    async def run_operation(answer, callback):
+        try:
+            await app.loop.run_in_executor(None, callback)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as error:
+            exit_question(exception=error)
+        else:
+            if loading.get("cancelled"):
+                exit_question(exception=KeyboardInterrupt)
+            else:
+                exit_question(result=answer)
+        finally:
+            loading.clear()
+            app.layout.focus(focus)
+
+    def exit_or_run(result=None, exception=None, style=""):
+        if loading and (exception is KeyboardInterrupt or isinstance(exception, KeyboardInterrupt)):
+            # Finish writes and their verification/rollback before closing UI.
+            loading["cancelled"] = True
+            return
+        # Keep this application and its alternate screen alive until the
+        # operation finishes, including the existing tables and resize handling.
+        if operations and exception is None and result in operations:
+            if not loading:
+                from rich.spinner import Spinner
+                message, callback = operations[result]
+                spinner = _TuiDisplay(console.console)
+                spinner.print(Spinner("dots", text=message, style="cyan"))
+                loading["display"] = spinner
+                app.layout.focus(indicator)
+                app.create_background_task(animate())
+                app.create_background_task(run_operation(result, callback))
+            return
+        exit_question(result=result, exception=exception, style=style)
+
+    app.exit = exit_or_run
+    try:
+        return question.unsafe_ask()
+    except KeyboardInterrupt:
+        return None
+
+
+@contextlib.contextmanager
+def _tui_output(console):
+    """Keep scriptable commands' ordinary print output in the menu screen."""
+    if not isinstance(console, _TuiDisplay):
+        yield
+        return
+    import io
+    from rich.text import Text
+    class LogStream(io.StringIO):
+        pending = ""
+
+        def write(self, value):
+            count = super().write(value)
+            self.pending += value
+            if "\n" in self.pending:
+                lines, self.pending = self.pending.rsplit("\n", 1)
+                # Older Rich decoders discard line breaks in from_ansi().
+                for line in lines.split("\n"):
+                    console.print(Text.from_ansi(line))
+                console.follow_tail = True
+            return count
+
+        def flush(self):
+            if self.pending:
+                console.print(Text.from_ansi(self.pending), end="")
+                console.follow_tail = True
+                self.pending = ""
+
+    buffer = LogStream()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            yield
+    finally:
+        buffer.flush()
+
+
+def _tui_run(console, message, callback, *args, **kwargs):
+    """Run any operation inside the same UI, retaining live output and resize."""
+    if not isinstance(console, _TuiDisplay):
+        with console.status(message):
+            return callback(*args, **kwargs)
+    import questionary
+    results = []
+
+    def operation():
+        with _tui_output(console):
+            results.append(callback(*args, **kwargs))
+
+    question = questionary.press_any_key_to_continue(message)
+    question.application.pre_run_callables.append(lambda: question.application.exit(result="operation"))
+    if _tui_ask(console, question, {"operation": (message, operation)}) is None:
+        raise KeyboardInterrupt
+    return results[0]
+
+
+@contextlib.contextmanager
+def _tui_console():
+    """Keep menu output out of shell history and restore Windows console flags."""
+    from rich.console import Console
+    from prompt_toolkit.application import get_app_session
+    restore = None
+    if os.name == "nt" and sys.stdout.isatty():
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel.GetStdHandle.restype = wintypes.HANDLE
+        kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetConsoleMode.restype = wintypes.BOOL
+        kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.SetConsoleMode.restype = wintypes.BOOL
+        handle = kernel.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = wintypes.DWORD()
+        # Rich otherwise selects its legacy renderer, which ignores screen erase.
+        if kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+            if kernel.SetConsoleMode(handle, mode.value | 0x0004):  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                restore = kernel, handle, mode.value
+    try:
+        console = Console()
+        output = get_app_session().output
+        output.enter_alternate_screen()
+        try:
+            output.flush()
+            yield _TuiDisplay(console, _TuiSessionOutput(output))
+        finally:
+            output.quit_alternate_screen()
+            output.show_cursor()
+            output.flush()
+    finally:
+        if restore is not None:
+            kernel, handle, mode = restore
+            kernel.SetConsoleMode(handle, mode)
+
+
+def _clear_tui(console):
+    if isinstance(console, _TuiDisplay):
+        console.clear()
+        return
+    if os.name == "nt" and console.legacy_windows is True:
+        # Classic consoles without VT still need an actual Win32 screen erase.
+        from prompt_toolkit.shortcuts import clear
+        clear()
+    else:
+        console.clear()
+
+
+def interactive(overrides, macos_disable_library_validation=False):
+    with _tui_console() as console:
+        return _interactive(console, overrides, macos_disable_library_validation)
+
+
+def _interactive(console, overrides, macos_disable_library_validation=False):
+    import questionary
+    qs = questionary.Style([("qmark", "fg:#00afff bold"), ("pointer", "fg:#00afff bold"),
+                            ("highlighted", "fg:#00afff bold"), ("selected", "fg:#00ff87 bold"),
+                            ("answer", "fg:#00ff87 bold")])
+    paths, status = _tui_run(console, "Scanning installed apps…", scan, overrides)
+    usage = _tui_run(console, "Refreshing account quotas…", _startup_usage)
+
+    def refresh_status():
+        nonlocal paths, status
+        paths, status = scan(overrides)
+
+    def refresh_quotas():
+        refreshed = _startup_usage()
+        usage.clear(); usage.update(refreshed)
+
+    while True:
+        _clear_tui(console)
+        _render(console, paths, status)
+        for target_type, label in (("cli-manager", "CLI + Manager + Extension"), ("ide", "IDE")):
+            _render_usage(console, usage.get(target_type, {}), label)
+        for error in usage.get("_errors", []):
+            console.print(error, style="yellow", markup=False)
+        action = _tui_ask(console, questionary.select("What do you want to do?", style=qs, qmark="»", choices=[
+            questionary.Choice("Patch app(s)", "patch"),
+            questionary.Choice("Restore app(s) from backup", "restore"),
+            questionary.Choice("Manage accounts", "accounts"),
+            questionary.Choice("Refresh quotas", "refresh-quotas"),
+            questionary.Choice("Refresh status", "refresh"),
+            questionary.Choice("Quit", "quit"),
+        ]), operations={"refresh": ("Refreshing app status…", refresh_status),
+                     "refresh-quotas": ("Refreshing account quotas…", refresh_quotas)})
+        if action in (None, "quit"):
+            return 0
+        if action in ("refresh", "refresh-quotas"):
+            continue
+        if action == "accounts":
+            _accounts_menu(console, qs, usage, overrides=overrides); continue
+        _clear_tui(console)
+        console.rule(f"[bold cyan]{action}[/]")
+        opts = []
+        for t in TARGETS:
+            path, st = paths[t], status[t]
+            if not path:
+                continue
+            if action == "patch" and st == "patched": continue
+            if action == "restore" and st != "patched": continue
+            opts.append(questionary.Choice(f"{SPEC[t]['name']}  · {st}", value=t))
+        if not opts:
+            console.print(f"[yellow]Nothing to {action}.[/]")
+            _tui_ask(console, questionary.press_any_key_to_continue("Enter to continue…", style=qs)); continue
+        sel = _tui_ask(console, questionary.checkbox(f"Select app(s) to {action}:", choices=opts, style=qs))
+        if not sel:
+            continue
+        def apply_action():
+            run(action, sel, overrides, macos_disable_library_validation=macos_disable_library_validation)
+            # Restoring a shared agy also changes the other target's status.
+            for t in TARGETS:
+                status[t] = _status_of(t, paths[t])
+
+        _tui_run(console, "Patching app(s)…" if action == "patch" else "Restoring app(s)…", apply_action)
+        console.rule(style="dim")
+        _tui_ask(console, questionary.press_any_key_to_continue("Enter to return to the menu…", style=qs))
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="Manage the Antigravity environment (patch location gates and manage profiles). "
+                    "Run with no arguments for the interactive menu.")
+    ap.add_argument("action", choices=("menu", "status", "patch", "restore", "accounts"), nargs="?",
+                    help="menu (default) | status | patch | restore | accounts manager <list|create|open|repair> [name] (macOS) | "
+                         "accounts <cli-manager|ide> <list|save|use|rename|current|logout|rm|usage> [name1] [name2]")
+    ap.add_argument("targets", nargs="*", default=[], metavar="{" + ",".join(TARGETS) + "}",
+                    help="which apps to act on (default: all)")
+    for t in TARGETS: ap.add_argument(f"--path-{t}", help=f"explicit path for {t}")
+    ap.add_argument("--macos-disable-library-validation", action="store_true",
+                    help="allow an Electron app's main executable to load other/unsigned libraries after ad-hoc signing (macOS patch/menu only)")
+    args = ap.parse_args(argv)
+
+    if args.macos_disable_library_validation and (sys.platform != "darwin" or args.action not in (None, "menu", "patch")):
+        ap.error("--macos-disable-library-validation is only available for patch/menu on macOS")
+
+    if args.action == "accounts":
+        return run_accounts(args.targets, {t: getattr(args, f"path_{t}") for t in TARGETS})
+
+    bad = [t for t in args.targets if t not in TARGETS]
+    if bad:
+        ap.error(f"invalid target(s): {', '.join(bad)} (choose from: {', '.join(TARGETS)})")
+    overrides = {t: getattr(args, f"path_{t}") for t in TARGETS}
+
+    if args.action in (None, "menu"):
+        try:
+            import questionary, rich  # noqa: F401
+            from prompt_toolkit import VERSION as toolkit_version
+            if tuple(map(int, toolkit_version[:3])) < (3, 0, 34):
+                raise ImportError("interactive menu requires prompt-toolkit >= 3.0.34")
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                raise RuntimeError("not a terminal")
+            return interactive(overrides, macos_disable_library_validation=args.macos_disable_library_validation)
+        except KeyboardInterrupt:
+            print(); return 0
+        except ImportError:
+            warn('interactive menu needs:  pip install rich questionary "prompt-toolkit>=3.0.34,<4"')
+            if args.action == "menu": return 2
+        except Exception:
+            if args.action == "menu":
+                warn("interactive menu needs a real terminal"); return 2
+        print("agy-manager - status")
+        return run("status", list(TARGETS), overrides)
+
+    targets = args.targets if args.targets else list(TARGETS)
+    print(f"agy-manager - {args.action}")
+    return run(args.action, targets, overrides, macos_disable_library_validation=args.macos_disable_library_validation)
+
+if __name__ == "__main__":
+    raise SystemExit(main())

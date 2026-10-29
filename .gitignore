@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node / npm
+node_modules/
+!app.asar.unpacked/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / local state
+.env
+.env.local
+.agents/
+*.log
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build & Installer artifacts
+/build/
+/dist/
+*.spec
+*.exe
+*-linux.sh
+app.asar.official_updated
+app.asar.patched_master
+app.asar.patched_master.unpacked/
+app.asar.test.unpacked/
+
+# Test coverage & temp files
+.coverage
+htmlcov/
+.pytest_cache/
