@@ -1720,10 +1720,10 @@ function injectControlCenterUI() {
             { id: "devops", name: "DevOps & Cloud", icon: "🐳", description: "Docker, K8s, GitHub Actions" },
             { id: "appsec", name: "AppSec & Reversing", icon: "🛡️", description: "OWASP, ASAR reverse, Win32" },
             { id: "qa", name: "QA & Testing", icon: "🧪", description: "Playwright E2E, Unit TDD" },
+            { id: "ai-agents", name: "AI & MCP Engineering", icon: "🤖", description: "MCP серверы, RAG, Prompt Eng, Agents" },
             { id: "web-research", name: "Web Research & OSINT", icon: "🔍", description: "Глубокий поиск, скрапинг, OSINT" },
             { id: "reverse-engineering", name: "Reverse Engineering & Replica", icon: "🧬", description: "11 скиллов Replica + ASAR реверс" },
-            { id: "minimal", name: "Minimal Context", icon: "⚡", description: "Минимум системных токенов" },
-            { id: "all", name: "Все скиллы", icon: "📦", description: "Включить все доступные" }
+            { id: "minimal", name: "Minimal Context", icon: "⚡", description: "Минимум системных токенов" }
         ];
 
         for (const p of allPresets) {

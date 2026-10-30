@@ -22,8 +22,10 @@ Thumbs.db
 desktop.ini
 
 # Build & Installer artifacts
-/build/
-/dist/
+build/
+dist/
+build_installer/build/
+build_installer/dist/
 *.spec
 *.exe
 *-linux.sh

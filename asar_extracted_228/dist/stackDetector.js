@@ -46,6 +46,16 @@ function detectProjectStack(workspacePath) {
             const isNext = "next" in allDeps;
             const isReact = "react" in allDeps || isNext;
             const isVue = "vue" in allDeps || "nuxt" in allDeps;
+            const isMcpOrAi = "@modelcontextprotocol/sdk" in allDeps || "langchain" in allDeps || "langgraph" in allDeps || "@google/genai" in allDeps;
+            if (isMcpOrAi) {
+                return {
+                    id: "ai-agents",
+                    name: "AI & MCP Engineering",
+                    icon: "🤖",
+                    description: "Разработка MCP серверов, RAG и архитектура AI агентов",
+                    skills: ["mcp-builder", "prompt-engineering", "rag-implementation", "context-window-management", "ai-agents-architect", "agent-preset-conductor"]
+                };
+            }
             const isPlaywright = "@playwright/test" in allDeps || "playwright" in allDeps;
 
             if (isPlaywright && !isReact && !isVue) {
@@ -69,6 +79,20 @@ function detectProjectStack(workspacePath) {
 
         // 3. Backend & Highload: Python, Go, Rust, PostgreSQL
         if (fileSet.has("pyproject.toml") || fileSet.has("requirements.txt") || fileSet.has("cargo.toml") || fileSet.has("go.mod")) {
+            let reqText = "";
+            try {
+                if (fileSet.has("requirements.txt")) reqText = fs.readFileSync(path.join(workspacePath, "requirements.txt"), "utf8").toLowerCase();
+                if (fileSet.has("pyproject.toml")) reqText += fs.readFileSync(path.join(workspacePath, "pyproject.toml"), "utf8").toLowerCase();
+            } catch (_) {}
+            if (reqText.includes("mcp") || reqText.includes("langchain") || reqText.includes("chromadb") || reqText.includes("langgraph")) {
+                return {
+                    id: "ai-agents",
+                    name: "AI & MCP Engineering",
+                    icon: "🤖",
+                    description: "Разработка MCP серверов, RAG и архитектура AI агентов",
+                    skills: ["mcp-builder", "prompt-engineering", "rag-implementation", "context-window-management", "ai-agents-architect", "agent-preset-conductor"]
+                };
+            }
             const isRust = fileSet.has("cargo.toml");
             const isGo = fileSet.has("go.mod");
             return {

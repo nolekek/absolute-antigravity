@@ -11,36 +11,71 @@ const PRESETS = {
         id: "web",
         name: "Web Modern",
         icon: "🌐",
-        description: "Next.js 15, React, Tailwind v4, Vue 3, TanStack Query, Web Vitals",
-        skills: ["nextjs-fullstack-guru", "tailwind-v4-master", "react-performance-opt", "vue-nuxt-expert", "web-state-query-master", "web-performance-auditor", "agent-preset-conductor", "ai-product-partner", "modern-web-guidance", "generative_ui"]
+        description: "Next.js 15, React, Tailwind v4, Vue 3, TanStack Query, Web Vitals, SEO & CRO",
+        skills: [
+            "ui-ux-pro-max", "frontend-design", "react-best-practices", "seo-audit", "form-cro",
+            "nextjs-fullstack-guru", "tailwind-v4-master", "react-performance-opt", "vue-nuxt-expert",
+            "web-state-query-master", "web-performance-auditor", "agent-preset-conductor",
+            "ai-product-partner", "modern-web-guidance", "generative_ui"
+        ]
     },
     "backend": {
         id: "backend",
         name: "Backend & DB",
         icon: "⚙️",
-        description: "PostgreSQL DBA, FastAPI, Go Highload, Rust, Redis, Kafka",
-        skills: ["postgres-dba-optimizer", "fastapi-async-architect", "go-highload-services", "rust-systems-safe", "redis-distributed-caching", "kafka-event-streaming", "agent-preset-conductor", "ai-product-partner"]
+        description: "PostgreSQL DBA, Database design, API design, Node.js, FastAPI, Go, Rust, Redis, Kafka",
+        skills: [
+            "database-design", "api-design-principles", "nodejs-best-practices",
+            "go-concurrency-patterns", "memory-safety-patterns",
+            "postgres-dba-optimizer", "fastapi-async-architect", "go-highload-services",
+            "rust-systems-safe", "redis-distributed-caching", "kafka-event-streaming",
+            "agent-preset-conductor", "ai-product-partner"
+        ]
     },
     "devops": {
         id: "devops",
         name: "DevOps & Cloud",
         icon: "🐳",
-        description: "Docker multi-stage, Kubernetes, GitHub Actions, Terraform IaC, Observability",
-        skills: ["docker-container-master", "k8s-manifest-generator", "github-actions-ci-cd", "terraform-iac-architect", "observability-telemetry-guru", "agent-preset-conductor", "ai-product-partner"]
+        description: "Docker multi-stage, Kubernetes, GitHub Actions, Terraform IaC, AWS Serverless, SRE, Observability",
+        skills: [
+            "incident-responder", "deployment-procedures", "aws-serverless",
+            "docker-container-master", "k8s-manifest-generator", "github-actions-ci-cd",
+            "terraform-iac-architect", "observability-telemetry-guru",
+            "agent-preset-conductor", "ai-product-partner"
+        ]
     },
     "appsec": {
         id: "appsec",
         name: "AppSec & Reversing",
         icon: "🛡️",
-        description: "OWASP vulnerability audit, Electron ASAR, Win32/PS, Network intercept, API fuzzer",
-        skills: ["appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "network-traffic-intercept", "api-pentest-fuzzer", "agent-preset-conductor", "premortem-redteam"]
+        description: "OWASP Top-10, API security, Ethical hacking, Electron ASAR, Win32/PS, Network intercept",
+        skills: [
+            "top-web-vulnerabilities", "api-security-best-practices", "ethical-hacking-methodology",
+            "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation",
+            "network-traffic-intercept", "api-pentest-fuzzer", "agent-preset-conductor", "premortem-redteam"
+        ]
     },
     "qa": {
         id: "qa",
         name: "QA & Testing",
         icon: "🧪",
-        description: "Playwright E2E resilient testing, TDD Unit synthesis, k6 load testing, API contracts",
-        skills: ["playwright-e2e-guru", "unit-test-synthesizer", "k6-load-testing-pro", "api-contract-tester", "agent-preset-conductor", "ai-product-partner"]
+        description: "Playwright E2E resilient testing, TDD, Test fixing, Code review audit, k6 load testing, API contracts",
+        skills: [
+            "test-driven-development", "test-fixing", "code-review-checklist",
+            "playwright-e2e-guru", "unit-test-synthesizer", "k6-load-testing-pro",
+            "api-contract-tester", "agent-preset-conductor", "ai-product-partner"
+        ]
+    },
+    "ai-agents": {
+        id: "ai-agents",
+        name: "AI & MCP Engineering",
+        icon: "🤖",
+        description: "MCP серверы, RAG, Prompt Engineering, архитектура агентов и управление контекстом",
+        skills: [
+            "mcp-builder", "prompt-engineering", "rag-implementation",
+            "context-window-management", "ai-agents-architect", "agent-evaluation",
+            "langgraph", "agent-preset-conductor", "ai-product-partner"
+        ]
     },
     "web-research": {
         id: "web-research",
@@ -67,27 +102,24 @@ const PRESETS = {
         icon: "⚡",
         description: "Минимум токенов в системном промпте",
         skills: ["agent-preset-conductor", "ai-product-partner"]
-    },
-    "all": {
-        id: "all",
-        name: "Все скиллы",
-        icon: "📦",
-        description: "Включить все доступные инструменты",
-        skills: []
     }
 };
 
 function loadConfig() {
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-        }
-    } catch (_) {}
-    return {
-        activePreset: "all",
+    let cfg = {
+        activePreset: "minimal",
         disabledSkills: [],
         customPresets: {}
     };
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+        }
+    } catch (_) {}
+    if (cfg.activePreset === "all" || !PRESETS[cfg.activePreset]) {
+        cfg.activePreset = "minimal";
+    }
+    return cfg;
 }
 
 function saveConfig(cfg) {
@@ -200,7 +232,7 @@ class SkillManager {
 
     getActivePreset() {
         this.config = loadConfig();
-        return this.config.activePreset || "all";
+        return this.config.activePreset || "minimal";
     }
 
     getSkills(workspacePath) {
@@ -307,20 +339,66 @@ class SkillManager {
         }
     }
 
-    applyPreset(presetSkills, workspacePath) {
+        applyPreset(presetSkills, workspacePath) {
         const { skills } = this.getSkills(workspacePath);
-        const targetSet = new Set(presetSkills);
-        const isAll = !presetSkills || presetSkills.length === 0;
-        const ALWAYS_ACTIVE = new Set(["agent-preset-conductor", "ai-product-partner"]);
+        const targetSet = new Set(presetSkills || []);
+        const ALWAYS_ACTIVE = new Set([
+            "agent-preset-conductor",
+            "systematic-debugging",
+            "verification-before-completion",
+            "concise-planning"
+        ]);
 
         for (const s of skills) {
-            const shouldBeActive = isAll || ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
+            const shouldBeActive = ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
             if (s.enabled !== shouldBeActive) {
                 this.toggleSkill(s.dirPath, shouldBeActive);
             }
         }
 
         return this.getSkills(workspacePath);
+    }
+
+    applyPresetByName(name, workspacePath) {
+        const key = (name || "").toLowerCase().trim();
+        const presetObj = PRESETS[key];
+        if (!presetObj) {
+            return { success: false, error: `Неизвестный пресет: "${name}". Доступные (9 пресетов): ${Object.keys(PRESETS).join(", ")}` };
+        }
+
+        const { skills } = this.getSkills(workspacePath);
+        const targetSet = new Set(presetObj.skills);
+        const ALWAYS_ACTIVE = new Set([
+            "agent-preset-conductor",
+            "systematic-debugging",
+            "verification-before-completion",
+            "concise-planning"
+        ]);
+
+        const activated = [];
+        for (const s of skills) {
+            const shouldBeActive = ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
+            if (shouldBeActive) activated.push(s.id);
+            if (s.enabled !== shouldBeActive) {
+                this.toggleSkill(s.dirPath, shouldBeActive);
+            }
+        }
+
+        this.config = loadConfig();
+        this.config.activePreset = key;
+        saveConfig(this.config);
+
+        const updated = this.getSkills(workspacePath);
+        return {
+            success: true,
+            preset: key,
+            name: presetObj.name,
+            icon: presetObj.icon,
+            activeSkills: activated,
+            totalActiveTokens: updated.totalActiveTokens,
+            activeCount: updated.activeCount,
+            totalCount: updated.totalCount
+        };
     }
 
     applyPresetByName(name, workspacePath) {

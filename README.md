@@ -13,7 +13,7 @@
 1. [Обзор ключевых возможностей](#-обзор-ключевых-возможностей)
 2. [Модуль: Control Center & Dynamic Skill Workshop](#-модуль-control-center--dynamic-skill-workshop)
    - [Проблема и архитектурное решение](#проблема-и-архитектурное-решение)
-   - [Каталог пресетов и матрица скиллов (41 навык)](#каталог-пресетов-и-матрица-скиллов)
+   - [Каталог пресетов и матрица скиллов (70 навыков)](#каталог-пресетов-и-матрица-скиллов)
    - [Автономное переключение агентом (`agent-preset-conductor`)](#автономное-переключение-агентом-agent-preset-conductor)
    - [Гарантия непрерывности (`ALWAYS_ACTIVE`)](#гарантия-непрерывности-always_active)
    - [Local HTTP IPC Bridge (порт 51122)](#local-http-ipc-bridge-порт-51122)
@@ -63,15 +63,15 @@
 
 | Пресет | ID | Иконка | Состав навыков | Описание стека |
 |---|---|---|---|---|
-| **Web Modern** | `web` | 🌐 | `nextjs-fullstack-guru`, `tailwind-v4-master`, `react-performance-opt`, `vue-nuxt-expert`, `web-state-query-master`, `web-performance-auditor`, `agent-preset-conductor`, `ai-product-partner`, `modern-web-guidance`, `generative_ui` | Next.js 15 App Router, React Server Components, Tailwind v4, Nuxt 3, оптимизация рендеринга и Core Web Vitals |
-| **Backend & DB** | `backend` | ⚙️ | `postgres-dba-optimizer`, `fastapi-async-architect`, `go-highload-services`, `rust-systems-safe`, `redis-distributed-caching`, `kafka-event-streaming`, `agent-preset-conductor`, `ai-product-partner` | Архитектура PostgreSQL, индексы, пулы соединений, async Python/FastAPI, высоконагруженные сервисы на Go, Rust, Redis, Kafka |
-| **DevOps & Cloud** | `devops` | 🐳 | `docker-container-master`, `k8s-manifest-generator`, `github-actions-ci-cd`, `terraform-iac-architect`, `observability-telemetry-guru`, `agent-preset-conductor`, `ai-product-partner` | Multi-stage Docker, K8s манифесты, Ingress/Helm, GitHub Actions CI/CD пайплайны, Terraform IaC, мониторинг и OpenTelemetry |
-| **AppSec & Reversing** | `appsec` | 🛡️ | `appsec-code-auditor`, `reverse-engineer-electron`, `win32-powershell-automation`, `network-traffic-intercept`, `api-pentest-fuzzer`, `agent-preset-conductor`, `premortem-redteam` | OWASP Top-10 аудит, декомпиляция ASAR/Electron, фаззинг API, перехват трафика, Win32 API и безопасная автоматизация PowerShell |
-| **QA & Testing** | `qa` | 🧪 | `playwright-e2e-guru`, `unit-test-synthesizer`, `k6-load-testing-pro`, `api-contract-tester`, `agent-preset-conductor`, `ai-product-partner` | Playwright E2E resilient testing (Page Object, auto-wait), генерация Unit-тестов по TDD, нагрузочное тестирование k6, API-контракты |
-| **Web Research** | `web-research` | 🔍 | `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator`, `replica-entrepreneur`, `agent-preset-conductor`, `ai-product-partner` | Глубокий поиск, извлечение контента, веб-скрапинг, OSINT и конкурентный анализ |
-| **Reverse Engineering** | `reverse-engineering` | 🧬 | `replica-recon`, `replica-architect`, `replica-backend`, `replica-brand`, `replica-build`, `replica-deploy`, `replica-design`, `replica-diff`, `replica-entrepreneur`, `replica-launch`, `replica-test`, `reverse-engineer-electron`, `agent-preset-conductor`, `ai-product-partner` | Полный Clean-Room цикл (11 навыков Replica) + Electron ASAR реверс-инжиниринг |
-| **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` | Чистый контекст для свободных диалогов и максимальной скорости ответов (минимум токенов) |
-| **Все скиллы** | `all` | 📦 | *Все 41 навык библиотеки + пользовательские скиллы* | Полный доступ ко всем инструментам без ограничений |
+| **Web Modern** | `web` | 🌐 | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `seo-audit`, `form-cro`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `react-performance-opt`, `vue-nuxt-expert`, `web-state-query-master`, `web-performance-auditor`, `agent-preset-conductor`, `ai-product-partner` | Next.js 15, React, Tailwind v4, Vue 3, TanStack Query, UI/UX дизайн, Web Vitals, SEO & CRO форм |
+| **Backend & DB** | `backend` | ⚙️ | `database-design`, `api-design-principles`, `nodejs-best-practices`, `go-concurrency-patterns`, `memory-safety-patterns`, `postgres-dba-optimizer`, `fastapi-async-architect`, `go-highload-services`, `rust-systems-safe`, `redis-distributed-caching`, `kafka-event-streaming` | Архитектура баз данных, дизайн REST/GraphQL API, Node.js, FastAPI, Go параллелизм, безопасный Rust, Redis и Kafka |
+| **DevOps & Cloud** | `devops` | 🐳 | `incident-responder`, `deployment-procedures`, `aws-serverless`, `docker-container-master`, `k8s-manifest-generator`, `github-actions-ci-cd`, `terraform-iac-architect`, `observability-telemetry-guru` | Multi-stage Docker, K8s манифесты, CI/CD Actions, Terraform IaC, AWS Serverless, SRE реагирование и Zero-Downtime деплои |
+| **AppSec & Reversing** | `appsec` | 🛡️ | `top-web-vulnerabilities`, `api-security-best-practices`, `ethical-hacking-methodology`, `appsec-code-auditor`, `reverse-engineer-electron`, `win32-powershell-automation`, `network-traffic-intercept`, `api-pentest-fuzzer` | OWASP Top-10, аудит безопасности API, этичный пентест, декомпиляция ASAR, безопасность Win32/PS и фаззинг |
+| **QA & Testing** | `qa` | 🧪 | `test-driven-development`, `test-fixing`, `code-review-checklist`, `playwright-e2e-guru`, `unit-test-synthesizer`, `k6-load-testing-pro`, `api-contract-tester` | Playwright E2E тесты, TDD Red-Green-Refactor, исправление упавших тестов, Code Review аудит и нагрузочные тесты k6 |
+| **AI & MCP Engineering** | `ai-agents` | 🤖 | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph` | Создание MCP серверов, RAG архитектура, промпт-инжиниринг, управление контекстным окном и LangGraph пайплайны |
+| **Web Research & OSINT** | `web-research` | 🔍 | `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator`, `replica-entrepreneur` | Глубокий веб-поиск, извлечение контента, веб-скрапинг (Playwright/Cheerio), OSINT и анализ конкурентов |
+| **Reverse Engineering** | `reverse-engineering` | 🧬 | Полный Clean-Room цикл (11 скиллов `replica-*`) + `reverse-engineer-electron` | Реверс-инжиниринг чужих сервисов с нуля по чистой методологии (recon, architect, backend, design, build, test, deploy) |
+| **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` (+ глобальные скиллы) | Чистый контекст для свободных диалогов и максимальной скорости ответов |
 
 ---
 
@@ -97,13 +97,19 @@
 
 ```javascript
 // asar_extracted_228/dist/skillManager.js
-const ALWAYS_ACTIVE = new Set(["agent-preset-conductor"]);
+const ALWAYS_ACTIVE = new Set([
+    "agent-preset-conductor",
+    "systematic-debugging",
+    "verification-before-completion",
+    "concise-planning"
+]);
 
 for (const s of skills) {
-    const shouldBeActive = isAll || ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
+    const shouldBeActive = ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
     if (s.enabled !== shouldBeActive) {
         this.toggleSkill(s.dirPath, shouldBeActive);
     }
+}
 }
 ```
 Благодаря этому правилу мета-скилл `agent-preset-conductor` **никогда не отключается** и всегда доступен модели.
@@ -176,7 +182,7 @@ if (Test-Path "$resources\app.asar") {
 Copy-Item "app.asar" "$resources\app.asar" -Force
 Copy-Item -Recurse -Force "app.asar.unpacked\*" "$resources\app.asar.unpacked\"
 
-# 3. Развёртывание библиотеки 41 навыка (skills-library)
+# 3. Развёртывание библиотеки 70 навыкова (skills-library)
 $skillsDir = "$HOME\.gemini\config\skills"
 New-Item -ItemType Directory -Force $skillsDir | Out-Null
 Copy-Item -Recurse -Force "skills-library\*" "$skillsDir\"
@@ -258,7 +264,7 @@ python scripts/antigravity_bot.py
 
 ```
 absolute-antigravity/
-├── skills-library/                  # Мастер-библиотека 41 навыка
+├── skills-library/                  # Мастер-библиотека 70 навыкова
 │   ├── agent-preset-conductor/      # Автономный мета-оркестратор (switch.py)
 │   ├── nextjs-fullstack-guru/       # Скилл Web: Next.js 15 & RSC
 │   ├── tailwind-v4-master/          # Скилл Web: Tailwind CSS v4
@@ -268,7 +274,7 @@ absolute-antigravity/
 │   ├── k8s-manifest-generator/      # Скилл DevOps: Kubernetes manifests
 │   ├── playwright-e2e-guru/         # Скилл QA: Playwright resilient E2E
 │   ├── reverse-engineer-electron/   # Скилл AppSec: Electron ASAR reversing
-│   └── ...                          # Полный набор 41 навыка
+│   └── ...                          # Полный набор 70 навыкова
 ├── asar_extracted_228/dist/         # Исходный код модификаций клиента (v2.28.1)
 │   ├── skillManager.js              # Движок пресетов и управления навыками
 │   ├── stackDetector.js             # Эвристический детектор стека проекта
