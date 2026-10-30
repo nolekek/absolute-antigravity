@@ -17,6 +17,7 @@ GLOBAL_SKILLS_DIR = os.path.expanduser(r"~\.gemini\config\skills")
 
 ALWAYS_ACTIVE = {
     "agent-preset-conductor",
+    "grill-me",
     "systematic-debugging",
     "verification-before-completion",
     "concise-planning"

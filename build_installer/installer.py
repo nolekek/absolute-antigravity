@@ -194,6 +194,16 @@ def install_tweaks():
                     shutil.copytree(s_src, s_dst)
 
             print(f"  {Colors.GREEN}✔ Библиотека навыков и Control Center Workshop успешно установлены!{Colors.RESET}")
+
+            # Deploy agent-orchestrator user rules
+            plugin_src = os.path.join(payload_dir, "agent-orchestrator")
+            plugin_dst = os.path.join(gemini_root, "config", "plugins", "agent-orchestrator")
+            if os.path.exists(plugin_src):
+                os.makedirs(os.path.dirname(plugin_dst), exist_ok=True)
+                if os.path.exists(plugin_dst):
+                    shutil.rmtree(plugin_dst)
+                shutil.copytree(plugin_src, plugin_dst)
+                print(f"  {Colors.GREEN}✔ Правила авто-маршрутизации (AGENTS.md) развернуты в config/plugins/agent-orchestrator/{Colors.RESET}")
         except Exception as e:
             print(f"  {Colors.YELLOW}[!] Предупреждение при распаковке навыков: {e}{Colors.RESET}")
 

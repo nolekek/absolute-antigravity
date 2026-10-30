@@ -344,6 +344,7 @@ class SkillManager {
         const targetSet = new Set(presetSkills || []);
         const ALWAYS_ACTIVE = new Set([
             "agent-preset-conductor",
+            "grill-me",
             "systematic-debugging",
             "verification-before-completion",
             "concise-planning"
@@ -370,6 +371,7 @@ class SkillManager {
         const targetSet = new Set(presetObj.skills);
         const ALWAYS_ACTIVE = new Set([
             "agent-preset-conductor",
+            "grill-me",
             "systematic-debugging",
             "verification-before-completion",
             "concise-planning"

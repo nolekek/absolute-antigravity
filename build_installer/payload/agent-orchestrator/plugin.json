@@ -1,0 +1,6 @@
+{
+  "name": "agent-orchestrator",
+  "displayName": "Agent Conductor & Auto-Routing",
+  "version": "1.0.0",
+  "description": "Autonomous preset orchestrator and interactive grill-me alignment rules for Antigravity."
+}
