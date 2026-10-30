@@ -13,6 +13,10 @@ description: >-
 
 # replica-entrepreneur
 
+> [!NOTE]
+> This skill belongs exclusively to the Clean-Room Reverse Engineering pipeline (reverse-engineering preset).
+> It must NOT be used for general web search or casual research tasks. Helper scripts or artifacts must be placed in replica/ or <appDataDir>\brain\<conversation-id>\scratch\, never directly in the workspace root.
+
 A straight copy of an app has no reason to exist. This skill finds the reason:
 what the original's users hate, in their own words, and fixes it in yours.
 

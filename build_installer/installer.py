@@ -204,6 +204,37 @@ def install_tweaks():
                     shutil.rmtree(plugin_dst)
                 shutil.copytree(plugin_src, plugin_dst)
                 print(f"  {Colors.GREEN}✔ Правила авто-маршрутизации (AGENTS.md) развернуты в config/plugins/agent-orchestrator/{Colors.RESET}")
+
+            # Deploy windows-desktop plugin
+            win_plugin_src = os.path.join(payload_dir, "windows-desktop")
+            win_plugin_dst = os.path.join(gemini_root, "config", "plugins", "windows-desktop")
+            if os.path.exists(win_plugin_src):
+                os.makedirs(os.path.dirname(win_plugin_dst), exist_ok=True)
+                if os.path.exists(win_plugin_dst):
+                    shutil.rmtree(win_plugin_dst)
+                shutil.copytree(win_plugin_src, win_plugin_dst)
+                print(f"  {Colors.GREEN}✔ Плагин Windows Desktop Automation развернут в config/plugins/windows-desktop/{Colors.RESET}")
+
+            # Register windows-desktop MCP server in ~/.gemini/config/mcp_config.json
+            mcp_cfg_path = os.path.join(gemini_root, "config", "mcp_config.json")
+            mcp_data = {"mcpServers": {}}
+            if os.path.exists(mcp_cfg_path):
+                try:
+                    with open(mcp_cfg_path, "r", encoding="utf-8") as f_mcp:
+                        mcp_data = json.load(f_mcp)
+                except Exception:
+                    pass
+            if "mcpServers" not in mcp_data:
+                mcp_data["mcpServers"] = {}
+            if "windows-desktop" not in mcp_data["mcpServers"]:
+                mcp_data["mcpServers"]["windows-desktop"] = {
+                    "command": "uvx",
+                    "args": ["windows-mcp", "serve"],
+                    "env": {"ANONYMIZED_TELEMETRY": "false"}
+                }
+                with open(mcp_cfg_path, "w", encoding="utf-8") as f_mcp:
+                    json.dump(mcp_data, f_mcp, indent=2, ensure_ascii=False)
+                print(f"  {Colors.GREEN}✔ MCP сервер windows-desktop зарегистрирован в {mcp_cfg_path}{Colors.RESET}")
         except Exception as e:
             print(f"  {Colors.YELLOW}[!] Предупреждение при распаковке навыков: {e}{Colors.RESET}")
 

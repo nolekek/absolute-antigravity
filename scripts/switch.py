@@ -15,36 +15,53 @@ BRIDGE_SWITCH_URL = "http://127.0.0.1:51122/api/switch-preset"
 CONFIG_FILE = os.path.expanduser(r"~\.gemini\antigravity\control-center-config.json")
 GLOBAL_SKILLS_DIR = os.path.expanduser(r"~\.gemini\config\skills")
 
-ALWAYS_ACTIVE = {"agent-preset-conductor", "ai-product-partner"}
+ALWAYS_ACTIVE = {
+    "agent-preset-conductor",
+    "grill-me",
+    "systematic-debugging",
+    "verification-before-completion",
+    "concise-planning"
+}
 
 PRESET_SKILLS_MAP = {
     "web": [
+        "ui-ux-pro-max", "frontend-design", "react-best-practices", "seo-audit", "form-cro",
         "nextjs-fullstack-guru", "tailwind-v4-master", "react-performance-opt", 
         "vue-nuxt-expert", "web-state-query-master", "web-performance-auditor", 
         "agent-preset-conductor", "ai-product-partner", "modern-web-guidance", "generative_ui"
     ],
     "backend": [
+        "database-design", "api-design-principles", "nodejs-best-practices",
+        "go-concurrency-patterns", "memory-safety-patterns",
         "postgres-dba-optimizer", "fastapi-async-architect", "go-highload-services", 
         "rust-systems-safe", "redis-distributed-caching", "kafka-event-streaming", 
         "agent-preset-conductor", "ai-product-partner"
     ],
     "devops": [
+        "incident-responder", "deployment-procedures", "aws-serverless",
         "docker-container-master", "k8s-manifest-generator", "github-actions-ci-cd", 
         "terraform-iac-architect", "observability-telemetry-guru", 
         "agent-preset-conductor", "ai-product-partner"
     ],
     "appsec": [
-        "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", 
+        "top-web-vulnerabilities", "api-security-best-practices", "ethical-hacking-methodology",
+        "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control", 
         "network-traffic-intercept", "api-pentest-fuzzer", 
         "agent-preset-conductor", "premortem-redteam"
     ],
     "qa": [
-        "playwright-e2e-guru", "unit-test-synthesizer", "k6-load-testing-pro", 
+        "test-driven-development", "test-fixing", "code-review-checklist",
+        "playwright-e2e-guru", "windows-desktop-control", "unit-test-synthesizer", "k6-load-testing-pro", 
         "api-contract-tester", "agent-preset-conductor", "ai-product-partner"
     ],
+    "ai-agents": [
+        "mcp-builder", "prompt-engineering", "rag-implementation",
+        "context-window-management", "ai-agents-architect", "agent-evaluation",
+        "langgraph", "agent-preset-conductor", "ai-product-partner"
+    ],
     "web-research": [
-        "deep-research-synthesizer", "web-scraper-harvester", "osint-recon-investigator", 
-        "replica-entrepreneur", "agent-preset-conductor", "ai-product-partner"
+        "search-specialist", "deep-research-synthesizer", "web-scraper-harvester", 
+        "osint-recon-investigator", "agent-preset-conductor", "ai-product-partner"
     ],
     "reverse-engineering": [
         "replica-recon", "replica-architect", "replica-backend", "replica-brand", 
@@ -54,8 +71,7 @@ PRESET_SKILLS_MAP = {
     ],
     "minimal": [
         "agent-preset-conductor", "ai-product-partner"
-    ],
-    "all": []
+    ]
 }
 
 def update_config_active_preset(preset_name):
@@ -98,7 +114,6 @@ def direct_fs_switch(preset_name):
     if not os.path.exists(GLOBAL_SKILLS_DIR):
         return False
 
-    is_all = preset_name == "all"
     target_skills = set(PRESET_SKILLS_MAP.get(preset_name, []))
 
     active_count = 0
@@ -110,7 +125,7 @@ def direct_fs_switch(preset_name):
             p = os.path.join(GLOBAL_SKILLS_DIR, entry)
             if os.path.isdir(p):
                 total_count += 1
-                should_be_active = is_all or entry in ALWAYS_ACTIVE or entry in target_skills
+                should_be_active = entry in ALWAYS_ACTIVE or entry in target_skills
                 toggle_skill_dir(p, should_be_active)
                 if should_be_active:
                     active_count += 1
@@ -152,7 +167,7 @@ def main():
 
     target_preset = sys.argv[1].strip().lower()
     if target_preset not in PRESET_SKILLS_MAP:
-        print(f"❌ Unknown preset: '{target_preset}'. Available: {', '.join(valid_presets)}")
+        print(f"❌ Unknown preset: '{target_preset}'. Available (9 presets): {', '.join(valid_presets)}")
         sys.exit(1)
 
     success = switch_preset(target_preset)

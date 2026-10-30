@@ -50,8 +50,8 @@
 3. **Быстрому исчерпанию квот:** Каждый лишний токен в промпте ускоряет исчерпание лимитов TPM (Tokens Per Minute).
 
 **Решение модуля Control Center:**
-- Создана библиотека из **41 специализированного навыка** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
-- Реализована система из **8 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, Web Research, Reverse Engineering, Minimal) + мета-пресет `all`.
+- Создана библиотека из **73 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
+- Реализована система из **9 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Minimal).
 - Переключение происходит мгновенно на лету без перезапуска клиента через атомарный тогл файлов (`SKILL.md` ↔ `SKILL.md.disabled`).
 - Модель снабжена автономным дирижёром `agent-preset-conductor`, позволяющим ей **самостоятельно переключать пресет** под конкретную задачу.
 
@@ -59,17 +59,17 @@
 
 ### Каталог пресетов и матрица скиллов
 
-Библиотека включает **41 production-grade навык**, распределённых по целевым пресетам:
+Библиотека включает **73 production-grade навыка**, распределённых по целевым пресетам:
 
 | Пресет | ID | Иконка | Состав навыков | Описание стека |
 |---|---|---|---|---|
 | **Web Modern** | `web` | 🌐 | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `seo-audit`, `form-cro`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `react-performance-opt`, `vue-nuxt-expert`, `web-state-query-master`, `web-performance-auditor`, `agent-preset-conductor`, `ai-product-partner` | Next.js 15, React, Tailwind v4, Vue 3, TanStack Query, UI/UX дизайн, Web Vitals, SEO & CRO форм |
 | **Backend & DB** | `backend` | ⚙️ | `database-design`, `api-design-principles`, `nodejs-best-practices`, `go-concurrency-patterns`, `memory-safety-patterns`, `postgres-dba-optimizer`, `fastapi-async-architect`, `go-highload-services`, `rust-systems-safe`, `redis-distributed-caching`, `kafka-event-streaming` | Архитектура баз данных, дизайн REST/GraphQL API, Node.js, FastAPI, Go параллелизм, безопасный Rust, Redis и Kafka |
 | **DevOps & Cloud** | `devops` | 🐳 | `incident-responder`, `deployment-procedures`, `aws-serverless`, `docker-container-master`, `k8s-manifest-generator`, `github-actions-ci-cd`, `terraform-iac-architect`, `observability-telemetry-guru` | Multi-stage Docker, K8s манифесты, CI/CD Actions, Terraform IaC, AWS Serverless, SRE реагирование и Zero-Downtime деплои |
-| **AppSec & Reversing** | `appsec` | 🛡️ | `top-web-vulnerabilities`, `api-security-best-practices`, `ethical-hacking-methodology`, `appsec-code-auditor`, `reverse-engineer-electron`, `win32-powershell-automation`, `network-traffic-intercept`, `api-pentest-fuzzer` | OWASP Top-10, аудит безопасности API, этичный пентест, декомпиляция ASAR, безопасность Win32/PS и фаззинг |
-| **QA & Testing** | `qa` | 🧪 | `test-driven-development`, `test-fixing`, `code-review-checklist`, `playwright-e2e-guru`, `unit-test-synthesizer`, `k6-load-testing-pro`, `api-contract-tester` | Playwright E2E тесты, TDD Red-Green-Refactor, исправление упавших тестов, Code Review аудит и нагрузочные тесты k6 |
+| **AppSec & Reversing** | `appsec` | 🛡️ | `top-web-vulnerabilities`, `api-security-best-practices`, `ethical-hacking-methodology`, `appsec-code-auditor`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `network-traffic-intercept`, `api-pentest-fuzzer` | OWASP Top-10, аудит безопасности API, этичный пентест, декомпиляция ASAR, безопасность Win32/PS, автоматизация рабочего стола Windows (Windows-MCP) и фаззинг |
+| **QA & Testing** | `qa` | 🧪 | `test-driven-development`, `test-fixing`, `code-review-checklist`, `playwright-e2e-guru`, `windows-desktop-control`, `unit-test-synthesizer`, `k6-load-testing-pro`, `api-contract-tester` | Playwright E2E тесты, автоматизация и тестирование рабочего стола Windows (Windows-MCP), TDD Red-Green-Refactor, исправление тестов, Code Review и k6 |
 | **AI & MCP Engineering** | `ai-agents` | 🤖 | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph` | Создание MCP серверов, RAG архитектура, промпт-инжиниринг, управление контекстным окном и LangGraph пайплайны |
-| **Web Research & OSINT** | `web-research` | 🔍 | `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator`, `replica-entrepreneur` | Глубокий веб-поиск, извлечение контента, веб-скрапинг (Playwright/Cheerio), OSINT и анализ конкурентов |
+| **Web Research & OSINT** | `web-research` | 🔍 | `search-specialist`, `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator` | Высокоточный веб-поиск (native `search_web`), извлечение контента, OSINT и чистая аналитика без генерации лишних скриптов |
 | **Reverse Engineering** | `reverse-engineering` | 🧬 | Полный Clean-Room цикл (11 скиллов `replica-*`) + `reverse-engineer-electron` | Реверс-инжиниринг чужих сервисов с нуля по чистой методологии (recon, architect, backend, design, build, test, deploy) |
 | **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` (+ глобальные скиллы) | Чистый контекст для свободных диалогов и максимальной скорости ответов |
 
@@ -333,3 +333,15 @@ Total Passed: 79 | Total Failed: 0 | Duration: 21.51s
 Final Result: ✔ 100% ALL TESTS PASSED
 ==============================================================================
 ```
+
+
+---
+
+### Плагин Windows Desktop Automation (`Windows-MCP`)
+
+Интегрирован нативный движок автоматизации рабочего стола Windows на базе **Windows-MCP**:
+* **Инспекция экрана (`State` / `Screenshot`):** извлечение полного дерева элементов UI активных окон (кнопки, поля ввода, текст) с физическими координатами $(x, y)$.
+* **DOM режим для браузеров (`use_dom=True`):** фильтрация системной панели браузера и прямое взаимодействие с веб-страницами в Chrome, Edge и Firefox.
+* **Эмуляция ввода (`Click`, `Move`, `Type`, `Shortcut`, `Scroll`):** клики по точным координатам, ввод текста, системные горячие клавиши (`Ctrl+C`, `Alt+Tab`, `Enter`).
+* **Управление приложениями и буфером (`App`, `Clipboard`, `Process`):** открытие программ по имени, фокусировка окон, чтение/запись системного буфера обмена.
+* **Безопасность:** строгий протокол в правилах агента (`AGENTS.md`) — обязательная инспекция перед действием, предотвращение race conditions и запрет на закрытие критических процессов.

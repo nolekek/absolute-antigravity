@@ -1,0 +1,19 @@
+{
+  "name": "windows-desktop",
+  "displayName": "Windows Desktop Automation",
+  "version": "1.0.0",
+  "description": "Full desktop control and screen reading for Windows: inspect UI elements, control mouse, keyboard, windows, and apps via Windows-MCP.",
+  "author": {
+    "name": "CursorTouch & Antigravity"
+  },
+  "keywords": [
+    "desktop",
+    "windows",
+    "automation",
+    "computer-use",
+    "screen",
+    "mouse",
+    "keyboard",
+    "mcp"
+  ]
+}

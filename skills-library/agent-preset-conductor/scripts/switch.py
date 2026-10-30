@@ -45,13 +45,13 @@ PRESET_SKILLS_MAP = {
     ],
     "appsec": [
         "top-web-vulnerabilities", "api-security-best-practices", "ethical-hacking-methodology",
-        "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", 
+        "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control", 
         "network-traffic-intercept", "api-pentest-fuzzer", 
         "agent-preset-conductor", "premortem-redteam"
     ],
     "qa": [
         "test-driven-development", "test-fixing", "code-review-checklist",
-        "playwright-e2e-guru", "unit-test-synthesizer", "k6-load-testing-pro", 
+        "playwright-e2e-guru", "windows-desktop-control", "unit-test-synthesizer", "k6-load-testing-pro", 
         "api-contract-tester", "agent-preset-conductor", "ai-product-partner"
     ],
     "ai-agents": [
@@ -60,8 +60,8 @@ PRESET_SKILLS_MAP = {
         "langgraph", "agent-preset-conductor", "ai-product-partner"
     ],
     "web-research": [
-        "deep-research-synthesizer", "web-scraper-harvester", "osint-recon-investigator", 
-        "replica-entrepreneur", "agent-preset-conductor", "ai-product-partner"
+        "search-specialist", "deep-research-synthesizer", "web-scraper-harvester", 
+        "osint-recon-investigator", "agent-preset-conductor", "ai-product-partner"
     ],
     "reverse-engineering": [
         "replica-recon", "replica-architect", "replica-backend", "replica-brand", 

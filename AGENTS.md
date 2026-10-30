@@ -38,3 +38,11 @@ The following 5 meta-skills are fundamental quality guardrails and must NEVER be
   node tests/run_all.js
   ```
 - **100% PASS (79/79 tests)** is a non-negotiable invariant before committing or deploying updates.
+
+
+---
+
+## 5. Workspace Hygiene & Anti-Pollution Invariant
+- **Zero Disposable Scripts in Workspace**: Agents must NEVER generate ad-hoc research, test, or scraping scripts (`.py`, `.js`, `.sh`, etc.) in the user's project root directory.
+- **Native Tools First**: For web searches, documentation lookups, and public web intelligence, ALWAYS utilize the native `search_web` tool over creating custom scrapers.
+- **Scratch Directory Mandate**: If exploratory scripts or local data parsing are strictly needed, store and run them exclusively in `<appDataDir>\brain\<conversation-id>\scratch\`, keeping the workspace pristine.

@@ -48,10 +48,10 @@ const PRESETS = {
         id: "appsec",
         name: "AppSec & Reversing",
         icon: "🛡️",
-        description: "OWASP Top-10, API security, Ethical hacking, Electron ASAR, Win32/PS, Network intercept",
+        description: "OWASP Top-10, API security, Ethical hacking, Electron ASAR, Win32/PS & Desktop UI, Network intercept",
         skills: [
             "top-web-vulnerabilities", "api-security-best-practices", "ethical-hacking-methodology",
-            "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation",
+            "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control",
             "network-traffic-intercept", "api-pentest-fuzzer", "agent-preset-conductor", "premortem-redteam"
         ]
     },
@@ -59,10 +59,10 @@ const PRESETS = {
         id: "qa",
         name: "QA & Testing",
         icon: "🧪",
-        description: "Playwright E2E resilient testing, TDD, Test fixing, Code review audit, k6 load testing, API contracts",
+        description: "Playwright E2E & Desktop UI (Windows-MCP), TDD, Test fixing, Code review audit, k6 load testing, API contracts",
         skills: [
             "test-driven-development", "test-fixing", "code-review-checklist",
-            "playwright-e2e-guru", "unit-test-synthesizer", "k6-load-testing-pro",
+            "playwright-e2e-guru", "windows-desktop-control", "unit-test-synthesizer", "k6-load-testing-pro",
             "api-contract-tester", "agent-preset-conductor", "ai-product-partner"
         ]
     },
@@ -81,8 +81,8 @@ const PRESETS = {
         id: "web-research",
         name: "Web Research & OSINT",
         icon: "🔍",
-        description: "Глубокий поиск, извлечение контента, веб-скрапинг, OSINT и анализ конкурентов",
-        skills: ["deep-research-synthesizer", "web-scraper-harvester", "osint-recon-investigator", "replica-entrepreneur", "agent-preset-conductor", "ai-product-partner"]
+        description: "Глубокий поиск, извлечение контента, веб-скрапинг, OSINT и аналитика",
+        skills: ["search-specialist", "deep-research-synthesizer", "web-scraper-harvester", "osint-recon-investigator", "agent-preset-conductor", "ai-product-partner"]
     },
     "reverse-engineering": {
         id: "reverse-engineering",
@@ -403,43 +403,7 @@ class SkillManager {
         };
     }
 
-    applyPresetByName(name, workspacePath) {
-        const key = (name || "").toLowerCase().trim();
-        const presetObj = PRESETS[key];
-        if (!presetObj) {
-            return { success: false, error: `Неизвестный пресет: "${name}". Доступные: ${Object.keys(PRESETS).join(", ")}` };
-        }
 
-        const { skills } = this.getSkills(workspacePath);
-        const targetSet = new Set(presetObj.skills);
-        const isAll = key === "all";
-        const ALWAYS_ACTIVE = new Set(["agent-preset-conductor", "ai-product-partner"]);
-
-        const activated = [];
-        for (const s of skills) {
-            const shouldBeActive = isAll || ALWAYS_ACTIVE.has(s.id) || targetSet.has(s.id);
-            if (shouldBeActive) activated.push(s.id);
-            if (s.enabled !== shouldBeActive) {
-                this.toggleSkill(s.dirPath, shouldBeActive);
-            }
-        }
-
-        this.config = loadConfig();
-        this.config.activePreset = key;
-        saveConfig(this.config);
-
-        const updated = this.getSkills(workspacePath);
-        return {
-            success: true,
-            preset: key,
-            name: presetObj.name,
-            icon: presetObj.icon,
-            activeSkills: activated,
-            totalActiveTokens: updated.totalActiveTokens,
-            activeCount: updated.activeCount,
-            totalCount: updated.totalCount
-        };
-    }
 }
 
 const skillManager = new SkillManager();
