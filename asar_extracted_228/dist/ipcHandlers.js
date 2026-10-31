@@ -494,6 +494,29 @@ function registerIpcHandlers(storageManager) {
         electron_1.ipcMain.handle('multiacc:save-bot-config', async (_event, cfg) => {
             return multiaccManager.saveBotConfig(cfg);
         });
+        electron_1.ipcMain.handle('multiacc:get-web-dashboard', async () => {
+            const { loadWebConfig, getLanIp } = require('./webDashboard');
+            const cfg = loadWebConfig();
+            const lanIp = getLanIp();
+            const port = cfg.port || 51125;
+            const pin = cfg.pin || "7788";
+            return {
+                lanIp,
+                port,
+                pin,
+                url: `http://${lanIp}:${port}/?pin=${pin}`
+            };
+        });
+        electron_1.ipcMain.handle('multiacc:save-web-pin', async (_event, pin) => {
+            const { loadWebConfig, saveWebConfig } = require('./webDashboard');
+            const cfg = loadWebConfig();
+            if (pin && String(pin).trim().length === 4) {
+                cfg.pin = String(pin).trim();
+                saveWebConfig(cfg);
+                return { ok: true, pin: cfg.pin };
+            }
+            return { ok: false, error: "PIN must be 4 digits" };
+        });
     } catch (e) {
         console.error('[MultiAcc] Failed to register IPC handlers:', e);
     }

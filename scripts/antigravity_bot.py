@@ -384,9 +384,33 @@ def get_all_workspaces():
     return res
 
 
+def get_conversations_from_brain(limit=8):
+    if not os.path.exists(BRAIN_DIR):
+        return []
+    try:
+        dirs = [d for d in os.listdir(BRAIN_DIR) if os.path.isdir(os.path.join(BRAIN_DIR, d))]
+        dirs.sort(key=lambda d: os.path.getmtime(os.path.join(BRAIN_DIR, d)), reverse=True)
+        res = []
+        for d in dirs[:limit]:
+            dt = get_conversation_details(d)
+            title = dt.get("last_user") or "Диалог Antigravity"
+            if len(title) > 36:
+                title = title[:33] + "..."
+            res.append({
+                "id": d,
+                "title": title,
+                "workspace": "",
+                "workspace_name": "Локальный",
+                "mtime": ""
+            })
+        return res
+    except Exception:
+        return []
+
+
 def get_conversations(workspace_path=None, limit=8):
     if not os.path.exists(DB_PATH):
-        return []
+        return get_conversations_from_brain(limit=limit)
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
@@ -394,7 +418,7 @@ def get_conversations(workspace_path=None, limit=8):
         rows = cur.fetchall()
         conn.close()
     except Exception:
-        return []
+        return get_conversations_from_brain(limit=limit)
 
     res = []
     for cid, title, ws_json, mtime in rows:
@@ -418,6 +442,11 @@ def get_conversations(workspace_path=None, limit=8):
         })
         if len(res) >= limit:
             break
+
+    if not res and workspace_path:
+        return get_conversations(workspace_path=None, limit=limit)
+    if not res:
+        return get_conversations_from_brain(limit=limit)
     return res
 
 
@@ -780,6 +809,8 @@ class AntigravityBotDaemon:
         self.bot = TelegramClient(self.token) if self.token else None
         self.running = False
         self.last_update_id = 0
+        self.processed_updates = set()
+        self.processed_message_ids = set()
 
     def start(self):
         if not self.token:
@@ -806,10 +837,24 @@ class AntigravityBotDaemon:
                     for update in res.get("result", []):
                         self.last_update_id = update["update_id"]
                         threading.Thread(target=self.handle_update, args=(update,), daemon=True).start()
+                else:
+                    err_str = str(res.get("error", ""))
+                    if "409" in err_str or "Conflict" in err_str:
+                        time.sleep(5)
+                    else:
+                        time.sleep(2)
             except Exception as e:
                 time.sleep(2)
 
     def handle_update(self, update):
+        up_id = update.get("update_id")
+        if up_id:
+            if up_id in self.processed_updates:
+                return
+            self.processed_updates.add(up_id)
+            if len(self.processed_updates) > 2000:
+                self.processed_updates = set(list(self.processed_updates)[-1000:])
+
         # 1. Handle Callback Query (Inline Buttons)
         if "callback_query" in update:
             cb = update["callback_query"]
@@ -827,6 +872,13 @@ class AntigravityBotDaemon:
         msg = update.get("message")
         if not msg:
             return
+        msg_id = msg.get("message_id")
+        if msg_id:
+            if msg_id in self.processed_message_ids:
+                return
+            self.processed_message_ids.add(msg_id)
+            if len(self.processed_message_ids) > 2000:
+                self.processed_message_ids = set(list(self.processed_message_ids)[-1000:])
 
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
@@ -1093,6 +1145,8 @@ class AntigravityBotDaemon:
         self.bot.send_message(chat_id, text, reply_markup=kb)
 
     def show_conversation_history(self, chat_id, cid):
+        if not cid:
+            cid = get_latest_active_cid()
         history = get_conversation_recent_history(cid, max_turns=6)
         if not history:
             self.bot.send_message(chat_id, "📝 <i>История пуста или файл лога пока не содержит завершенных шагов.</i>")

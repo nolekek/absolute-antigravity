@@ -6,6 +6,7 @@ __pycache__/
 # Node / npm
 node_modules/
 !app.asar.unpacked/node_modules/
+app.asar.unpacked/credHelper.py
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -23,7 +24,7 @@ desktop.ini
 
 # Build & Installer artifacts
 build/
-dist/
+/dist/
 build_installer/build/
 build_installer/dist/
 *.spec

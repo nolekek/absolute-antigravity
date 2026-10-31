@@ -192,6 +192,8 @@ const multiaccAPI = {
     getBotStatus: () => electron_1.ipcRenderer.invoke('multiacc:get-bot-status'),
     toggleBot: () => electron_1.ipcRenderer.invoke('multiacc:toggle-bot'),
     saveBotConfig: (cfg) => electron_1.ipcRenderer.invoke('multiacc:save-bot-config', cfg),
+    getWebDashboard: () => electron_1.ipcRenderer.invoke('multiacc:get-web-dashboard'),
+    saveWebPin: (pin) => electron_1.ipcRenderer.invoke('multiacc:save-web-pin', pin),
     onBotStatusChanged: (callback) => {
         const handler = (_event, state) => callback(state);
         electron_1.ipcRenderer.on('multiacc:bot-status-changed', handler);
@@ -528,7 +530,43 @@ electron_1.contextBridge.exposeInMainWorld('controlCenter', controlCenterAPI);
                 <button class="multiacc-btn action-primary" id="multiacc-add-btn" title="Добавить аккаунт в карусель">➕ Добавить</button>
                 <button class="multiacc-toggle" id="multiacc-toggle" title="Автоматически переходить на след. аккаунт при исчерпании лимитов">⚡ Авто: ВКЛ</button>
                 <button class="multiacc-btn" id="multiacc-bot-btn" title="ЛКМ: Вкл/Выкл бота | ПКМ: Настройки Telegram">🤖 Бот: ⚪ ВЫКЛ</button>
+                <button class="multiacc-btn" id="multiacc-web-btn" title="📱 Открыть мобильную веб-панель (LAN)">📱 Web-панель</button>
                 <div class="multiacc-dropdown" id="multiacc-dropdown" style="display: none;"></div>
+            </div>
+            <div class="multiacc-modal-overlay" id="multiacc-web-modal" style="display: none;">
+                <div class="multiacc-modal-card" style="max-width: 440px;">
+                    <div class="multiacc-modal-header">
+                        <span>📱 Мобильная Веб-Панель (LAN)</span>
+                        <span style="cursor:pointer; padding:2px 6px;" id="multiacc-web-modal-close">✕</span>
+                    </div>
+                    <div style="font-size:12px; color:#94a3b8; line-height: 1.5;">
+                        Управляйте Antigravity со смартфона в локальной сети: проверяйте квоты, переключайте слоты аккаунтов и отправляйте задачи.
+                    </div>
+                    <div class="multiacc-form-group">
+                        <label>Ссылка для подключения смартфона:</label>
+                        <div style="display:flex; gap:6px;">
+                            <input type="text" id="multiacc-web-url-input" readonly style="font-family:monospace; font-size:12px;" />
+                            <button class="multiacc-btn" id="multiacc-web-copy-btn" title="Копировать ссылку">📋</button>
+                        </div>
+                    </div>
+                    <div class="multiacc-form-group">
+                        <label>PIN-код для входа (4 цифры):</label>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <input type="text" id="multiacc-web-pin-input" maxlength="4" style="font-family:monospace; font-size:14px; font-weight:700; width:90px; text-align:center;" />
+                            <button class="multiacc-btn" id="multiacc-web-save-pin-btn">Сохранить PIN</button>
+                        </div>
+                    </div>
+                    <div style="background:#0d1117; border:1px solid #30363d; border-radius:8px; padding:10px; font-size:11px; color:#8b949e; line-height:1.4;">
+                        💡 <b>Быстрый старт:</b><br>
+                        1. Подключите телефон к тому же Wi-Fi роутеру.<br>
+                        2. Откройте ссылку в Safari или Chrome на телефоне.<br>
+                        3. Добавьте страничку на главный экран смартфона (PWA).
+                    </div>
+                    <div class="multiacc-modal-actions">
+                        <button class="multiacc-btn" id="multiacc-web-modal-open-browser">🌐 Открыть в браузере</button>
+                        <button class="multiacc-btn action-primary" id="multiacc-web-modal-done">Закрыть</button>
+                    </div>
+                </div>
             </div>
             <div class="multiacc-modal-overlay" id="multiacc-bot-modal" style="display: none;">
                 <div class="multiacc-modal-card">
@@ -850,27 +888,8 @@ electron_1.contextBridge.exposeInMainWorld('controlCenter', controlCenterAPI);
             }
         }
 
-        async function checkDirectBotStatus() {
-            try {
-                const ctrl = new AbortController();
-                const tid = setTimeout(() => ctrl.abort(), 400);
-                const r = await fetch('http://127.0.0.1:51123', { signal: ctrl.signal });
-                clearTimeout(tid);
-                if (r.ok) {
-                    const data = await r.json();
-                    return { running: !!data.running };
-                }
-            } catch (e) {}
-            return null;
-        }
-
         async function refreshBotView() {
             try {
-                const direct = await checkDirectBotStatus();
-                if (direct !== null) {
-                    updateBotUI(direct);
-                    return;
-                }
                 const status = await multiaccAPI.getBotStatus();
                 updateBotUI(status);
             } catch (e) {}
@@ -892,20 +911,15 @@ electron_1.contextBridge.exposeInMainWorld('controlCenter', controlCenterAPI);
         botBtn.onclick = async () => {
             botBtn.disabled = true;
             try {
-                const direct = await checkDirectBotStatus();
-                const isRunning = direct ? direct.running : (await multiaccAPI.getBotStatus()).running;
-                if (isRunning) {
-                    try {
-                        await fetch('http://127.0.0.1:51123/stop', { method: 'POST' });
-                    } catch (e) {}
+                const cur = await multiaccAPI.getBotStatus();
+                if (cur && cur.running) {
                     const res = await multiaccAPI.toggleBot();
                     updateBotUI({ running: false });
                     showToast('⚪ Telegram бот остановлен.');
                     return;
                 }
 
-                const cur = await multiaccAPI.getBotStatus();
-                if (!cur.configured) {
+                if (!cur || !cur.configured) {
                     await openBotModal();
                     return;
                 }
@@ -954,6 +968,55 @@ electron_1.contextBridge.exposeInMainWorld('controlCenter', controlCenterAPI);
                 showToast('❌ Ошибка: ' + e.message);
             } finally {
                 botModalSave.disabled = false;
+            }
+        };
+
+        
+        // --- Web Dashboard Modal Logic ---
+        const webBtn = document.getElementById('multiacc-web-btn');
+        const webModal = document.getElementById('multiacc-web-modal');
+        const webModalClose = document.getElementById('multiacc-web-modal-close');
+        const webModalDone = document.getElementById('multiacc-web-modal-done');
+        const webUrlInput = document.getElementById('multiacc-web-url-input');
+        const webCopyBtn = document.getElementById('multiacc-web-copy-btn');
+        const webPinInput = document.getElementById('multiacc-web-pin-input');
+        const webSavePinBtn = document.getElementById('multiacc-web-save-pin-btn');
+        const webOpenBrowserBtn = document.getElementById('multiacc-web-modal-open-browser');
+
+        async function openWebModal() {
+            try {
+                const info = await multiaccAPI.getWebDashboard();
+                webUrlInput.value = info.url || `http://${info.lanIp}:${info.port}/?pin=${info.pin}`;
+                webPinInput.value = info.pin || "7788";
+            } catch (e) {}
+            webModal.style.display = 'flex';
+        }
+
+        if (webBtn) webBtn.onclick = openWebModal;
+        if (webModalClose) webModalClose.onclick = () => { webModal.style.display = 'none'; };
+        if (webModalDone) webModalDone.onclick = () => { webModal.style.display = 'none'; };
+        if (webCopyBtn) webCopyBtn.onclick = () => {
+            navigator.clipboard.writeText(webUrlInput.value);
+            showToast('📋 Ссылка скопирована!');
+        };
+        if (webOpenBrowserBtn) webOpenBrowserBtn.onclick = () => {
+            if (webUrlInput.value) {
+                window.open(webUrlInput.value, '_blank');
+            }
+        };
+        if (webSavePinBtn) webSavePinBtn.onclick = async () => {
+            const pin = webPinInput.value.trim();
+            if (pin.length !== 4) {
+                showToast('❌ PIN должен быть из 4 цифр!');
+                return;
+            }
+            const res = await multiaccAPI.saveWebPin(pin);
+            if (res && res.ok) {
+                showToast('💾 PIN-код сохранен!');
+                const info = await multiaccAPI.getWebDashboard();
+                webUrlInput.value = info.url;
+            } else {
+                showToast('❌ Ошибка сохранения PIN');
             }
         };
 

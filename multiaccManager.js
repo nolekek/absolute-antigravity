@@ -30,9 +30,12 @@ class MultiaccManager {
         this.restartLsCallback = null;
         this.botProcess = null;
         this.httpBridgeServer = null;
+        this.webDashboard = null;
         this.startCommandWatcher();
         this.startHttpServer();
         this.startBotWatcher();
+        this.autoStartBotIfEnabled();
+        this.startWebDashboard();
     }
 
     startHttpServer() {
@@ -772,7 +775,7 @@ class MultiaccManager {
         return new Promise((resolve) => {
             const net = require('net');
             const s = new net.Socket();
-            s.setTimeout(250);
+            s.setTimeout(500);
             s.on('connect', () => {
                 s.destroy();
                 resolve(true);
@@ -918,6 +921,210 @@ class MultiaccManager {
         }
     }
 
+
+    startWebDashboard() {
+        const isTest = process.env.NODE_ENV === 'test' || process.argv.some(a => a.includes('test'));
+        if (isTest) return;
+        try {
+            const { startWebDashboard } = require('./webDashboard');
+            this.webDashboard = startWebDashboard(this);
+        } catch (e) {
+            console.error('[MultiAcc] Failed to start Web Dashboard:', e);
+        }
+    }
+
+    autoStartBotIfEnabled() {
+        const isTest = process.env.NODE_ENV === 'test' || process.argv.some(a => a.includes('test'));
+        if (isTest) return;
+        const t = setTimeout(async () => {
+            try {
+                const status = await this.getBotStatus();
+                if (status.configured && !status.running) {
+                    const botConfigPath = path.join(USER_HOME, '.gemini', 'antigravity_telegram.json');
+                    if (fs.existsSync(botConfigPath)) {
+                        const cfg = JSON.parse(fs.readFileSync(botConfigPath, 'utf-8'));
+                        if (cfg.enabled) {
+                            console.log('[MultiAcc Bot] Auto-starting enabled Telegram bot daemon...');
+                            await this.toggleBot();
+                        }
+                    }
+                }
+            } catch (e) {}
+        }, 2500);
+        try { t.unref(); } catch (_) {}
+    }
+
+    focusWindow() {
+        const wins = BrowserWindow.getAllWindows();
+        if (wins.length > 0) {
+            const win = wins[0];
+            if (win.isMinimized()) win.restore();
+            win.show();
+            win.focus();
+            return { ok: true };
+        }
+        return { ok: false, error: "No window open" };
+    }
+
+    async newConversation() {
+        const wins = BrowserWindow.getAllWindows();
+        if (wins.length > 0) {
+            const win = wins[0];
+            if (win.isMinimized()) win.restore();
+            await win.webContents.executeJavaScript(`(function() {
+                const btn = document.querySelector('[data-testid="new-conversation-button"]') ||
+                            document.querySelector('[data-testid="app-icon-new-conversation-button"]');
+                if (btn) { btn.click(); return { clicked: true }; }
+                window.history.pushState(null, '', '/');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+                return { fallback: true };
+            })()`);
+            return { ok: true };
+        }
+        return { ok: false, error: "No window open" };
+    }
+
+    async injectPrompt(promptText, targetCid = null) {
+        if (!promptText || !promptText.trim()) {
+            throw new Error("prompt is required");
+        }
+        const wins = BrowserWindow.getAllWindows();
+        if (wins.length === 0) {
+            throw new Error("No Antigravity window open");
+        }
+        const win = wins[0];
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+
+        if (targetCid) {
+            win.webContents.send("notification:clicked", { cascadeId: targetCid });
+            await new Promise(r => setTimeout(r, 400));
+        }
+
+        const code = `
+        (async function(text) {
+            function findInput() {
+                return document.querySelector('#antigravity\\.agentSidePanelInputBox [contenteditable="true"]') ||
+                       document.querySelector('[data-testid="agent-input-box"] [contenteditable="true"]') ||
+                       document.querySelector('[contenteditable="true"]') ||
+                       document.querySelector('textarea[data-testid="voice-dock-input"]') ||
+                       document.querySelector('textarea[aria-label="Message this chat"]') ||
+                       document.querySelector('textarea');
+            }
+            const el = findInput();
+            if (!el) {
+                return { ok: false, error: "No input editor (contenteditable or textarea) found in DOM" };
+            }
+            el.focus();
+
+            if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                sel.removeAllRanges();
+                sel.addRange(range);
+
+                let ok = document.execCommand('insertText', false, text);
+                if (!ok) {
+                    el.dispatchEvent(new InputEvent('beforeinput', {
+                        inputType: 'insertText',
+                        data: text,
+                        bubbles: true,
+                        cancelable: true
+                    }));
+                }
+            } else {
+                const proto = window.HTMLTextAreaElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                if (setter) {
+                    setter.call(el, text);
+                } else {
+                    el.value = text;
+                }
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            for (let i = 0; i < 15; i++) {
+                await new Promise(r => setTimeout(r, 100));
+                const sendBtn = document.querySelector('[data-testid="send-button"]') ||
+                                document.querySelector('button[aria-label="Send message"]') ||
+                                document.querySelector('button.agy-send-button') ||
+                                document.querySelector('button[data-testid="voice-dock-send"]') ||
+                                document.querySelector('button[aria-label="Send"]');
+                if (sendBtn && !sendBtn.disabled) {
+                    sendBtn.click();
+                    return { ok: true, method: "button_click", buttonId: sendBtn.getAttribute('data-testid') };
+                }
+            }
+
+            el.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true
+            }));
+            return { ok: true, method: "enter_fallback" };
+        })(${JSON.stringify(promptText)});
+        `;
+        return await win.webContents.executeJavaScript(code);
+    }
+
+    async getQuotas() {
+        const https = require("https");
+        const wins = BrowserWindow.getAllWindows();
+        if (wins.length === 0 || wins[0].isDestroyed()) {
+            return { ok: false, error: "No window open" };
+        }
+        const winInfo = await wins[0].webContents.executeJavaScript(`({
+            origin: window.location.origin,
+            csrf: window.__APP_CONFIG__?.csrfToken
+        })`);
+        if (!winInfo || !winInfo.origin || !winInfo.csrf) {
+            return { ok: false, error: "CSRF or window URL unavailable" };
+        }
+        return new Promise((resolve) => {
+            const postData = JSON.stringify({ forceRefresh: true });
+            const rpcUrl = new URL("/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary", winInfo.origin);
+            const rpcReq = https.request({
+                hostname: rpcUrl.hostname,
+                port: rpcUrl.port,
+                path: rpcUrl.pathname,
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Connect-Protocol-Version": "1",
+                    "x-codeium-csrf-token": winInfo.csrf,
+                    "Content-Length": Buffer.byteLength(postData)
+                },
+                rejectUnauthorized: false,
+                timeout: 5000
+            }, (rpcRes) => {
+                let respBody = "";
+                rpcRes.on("data", c => { respBody += c; });
+                rpcRes.on("end", () => {
+                    try {
+                        const parsed = JSON.parse(respBody || "{}");
+                        resolve({ ok: true, data: parsed });
+                    } catch (e) {
+                        resolve({ ok: false, error: "Invalid JSON from Language Server: " + e.message });
+                    }
+                });
+            });
+            rpcReq.on("error", (e) => {
+                resolve({ ok: false, error: "Language Server error: " + e.message });
+            });
+            rpcReq.on("timeout", () => {
+                rpcReq.destroy();
+                resolve({ ok: false, error: "Language Server quota timeout" });
+            });
+            rpcReq.write(postData);
+            rpcReq.end();
+        });
+    }
 }
 
 exports.multiaccManager = new MultiaccManager();
