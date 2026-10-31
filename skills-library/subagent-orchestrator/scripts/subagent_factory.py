@@ -173,6 +173,23 @@ PRESET_SKILLS = {
             "Validate plugins with Steinberg pluginval at strictness level 10.",
             "Maintain Section 5 Workspace Hygiene: zero disposable scripts in workspace root."
         ]
+    },
+    "meta-dev": {
+        "name": "subagent-meta-dev",
+        "role": "Antigravity Core & Self-Evolution Engineer",
+        "description": "Specialized internal developer subagent for Antigravity core maintenance, ASAR packing, multi-account carousel, and skill testing",
+        "skills": [
+            "antigravity-core-dev", "reverse-engineer-electron", "win32-powershell-automation",
+            "windows-desktop-control", "test-driven-development", "test-fixing",
+            "code-review-checklist", "nodejs-best-practices", "subagent-orchestrator",
+            "hierarchical-task-decomposer", "github-actions-ci-cd"
+        ],
+        "guidelines": [
+            "Strictly enforce 100% test pass (79/79) on all changes.",
+            "Always synchronize changes between root, asar_extracted_228/dist/, and installation.",
+            "Preserve ASAR unpack rules for chrome-devtools-mcp and credHelper.py.",
+            "Maintain Section 5 Workspace Hygiene: zero disposable scripts in workspace root."
+        ]
     }
 }
 

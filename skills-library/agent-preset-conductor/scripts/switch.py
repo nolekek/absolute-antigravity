@@ -93,6 +93,12 @@ PRESET_SKILLS_MAP = {
         "test-driven-development", "test-fixing", "code-review-checklist",
         "agent-preset-conductor"
     ],
+    "meta-dev": [
+        "antigravity-core-dev", "reverse-engineer-electron", "win32-powershell-automation",
+        "windows-desktop-control", "test-driven-development", "test-fixing",
+        "code-review-checklist", "nodejs-best-practices", "subagent-orchestrator",
+        "hierarchical-task-decomposer", "github-actions-ci-cd", "agent-preset-conductor"
+    ],
     "minimal": [
         "agent-preset-conductor", "ai-product-partner"
     ]

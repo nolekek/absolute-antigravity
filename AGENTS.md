@@ -16,8 +16,8 @@ This file defines mandatory workspace-level guardrails, architectural invariants
 
 ## 2. No "All-Inclusive" Preset
 - The `all` ("Все включено") preset is permanently retired to eliminate prompt bloat and context rot.
-- The system strictly maintains 13 focused presets:
-  `web`, `backend`, `devops`, `appsec`, `qa`, `ai-agents`, `web-research`, `reverse-engineering`, `product`, `orchestrator`, `systems`, `vst3`, `minimal`.
+- The system strictly maintains 14 focused presets:
+  `web`, `backend`, `devops`, `appsec`, `qa`, `ai-agents`, `web-research`, `reverse-engineering`, `product`, `orchestrator`, `systems`, `vst3`, `meta-dev`, `minimal`.
 - Automatic fallback in `loadConfig()` must route invalid or legacy `all` configs to `minimal`.
 
 ---

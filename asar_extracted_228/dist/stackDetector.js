@@ -17,6 +17,17 @@ function detectProjectStack(workspacePath) {
         const files = fs.readdirSync(workspacePath);
         const fileSet = new Set(files.map(f => f.toLowerCase()));
 
+        // 0. Antigravity Core & Self-Dev Workspace
+        if (fileSet.has("multiaccmanager.js") || (fileSet.has("skillmanager.js") && fileSet.has("credhelper.py"))) {
+            return {
+                id: "meta-dev",
+                name: "Antigravity Core & Self-Dev",
+                icon: "🛠️",
+                description: "Разработка ядра Antigravity, Electron ASAR, мультиаккаунт и скиллы",
+                skills: ["antigravity-core-dev", "reverse-engineer-electron", "win32-powershell-automation", "agent-preset-conductor"]
+            };
+        }
+
         // 1. DevOps / K8s / Docker-heavy repo
         if (fileSet.has("docker-compose.yml") || fileSet.has("dockerfile") || fileSet.has("k8s") || fileSet.has(".github")) {
             const hasCi = fs.existsSync(path.join(workspacePath, ".github", "workflows"));

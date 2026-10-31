@@ -1,6 +1,6 @@
 ---
 name: agent-preset-conductor
-description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, product, orchestrator, systems, vst3, minimal), and activates the grill-me skill in disputable/ambiguous situations."
+description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, product, orchestrator, systems, vst3, meta-dev, minimal), and activates the grill-me skill in disputable/ambiguous situations."
 ---
 
 # Agent Preset Conductor & Context Orchestrator
@@ -24,6 +24,13 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 > 1. Агент **ОБЯЗАН БЕЗУСЛОВНО И НЕМЕДЛЕННО** переключиться на пресет `vst3` (`VST3 & Audio DSP Studio`).
 > 2. **ЗАПРЕЩЕНО** путать этот домен с `systems`, `orchestrator` или `web`.
 > 3. **ЗАПРЕЩЕНО** запускать лишние согласования — домен аудиоплагинов однозначен и требует совмещения DSP (C++/JUCE), аудио UI/UX и мультиагентной координации!
+
+### 🛠️ ЖЕСТКИЙ ПРИОРИТЕТ ДЛЯ РАЗРАБОТКИ ЯДРА (ANTIGRAVITY CORE & META-DEV)
+> [!IMPORTANT]
+> При работе над самим Antigravity, его исходниками или инфраструктурой (маркеры: **`asar`, `мультиаккаунт`, `multiacc`, `credhelper`, `skillmanager`, `preload.js`, `languageServer`, `перепакуй`, `repack`, `обнови инсталлятор`, `мета-пресет`**):
+> 
+> 1. Агент **ОБЯЗАН БЕЗУСЛОВНО** переключиться на пресет `meta-dev` (`Antigravity Core & Self-Dev 🛠️`).
+> 2. Использовать специализированный ранбук `antigravity-core-dev` и CLI-инструмент `python scripts/antigravity_dev.py` для автоматизации полного цикла.
 
 ### 1. Однозначный домен (Clear Domain)
 Если задача на 100% относится к конкретному стеку технологий (только CI/CD, только API/БД, только Web UI):
@@ -56,7 +63,7 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 
 ---
 
-## 🧭 МАТРИЦА 13 ПРЕСЕТОВ
+## 🧭 МАТРИЦА 14 ПРЕСЕТОВ
 | Пресет (`ID`) | Название | Маркеры технологий и задачи | Ключевые скиллы пресета |
 |---|---|---|---|
 | `web` | Web Modern | React, Next.js, Vue, Nuxt, Tailwind v4, CSS, HTML, UI/UX дизайн, frontend-design, Web Vitals, SEO, CRO форм, TanStack Query | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `seo-audit`, `form-cro` |
@@ -71,6 +78,7 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 | `orchestrator` | Orchestrator & Multi-Agent | Масштабные мультидоменные проекты, координация команды субагентов, параллельная разработка с компиляцией изолированных пресетов | `subagent-orchestrator`, `hierarchical-task-decomposer`, `multi-agent-debate-consensus`, `context-synthesis-reducer`, `ai-agents-architect`, `prompt-engineering`, `langgraph`, `code-review-checklist`, `premortem-redteam` |
 | `systems` | Systems & High-Perf | C++, C, Zig, Rust, ассемблер, RAII, ручное управление памятью, lock-free многопоточность, SIMD, санитайзеры ASan/TSan, CMake/Ninja, низкоуровневая оптимизация и профилирование | `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `rust-systems-safe`, `memory-safety-patterns`, `test-driven-development`, `test-fixing`, `code-review-checklist` |
 | `vst3` | VST3 & Audio DSP Studio | VST3/VST3i плагины, синтезаторы, DSP эффекты, JUCE C++, real-time audio thread safety, кастомный LookAndFeel и аудио UI/UX дизайн | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` |
+| `meta-dev` | Antigravity Core & Self-Dev | Внутренняя разработка Antigravity: Electron ASAR сборка/деплой, мультиаккаунт, ранбук `antigravity-core-dev`, тесты и автоматизация | `antigravity-core-dev`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `nodejs-best-practices`, `subagent-orchestrator` |
 | `minimal` | Minimal Context | Свободный диалог, концептуальные обсуждения, задачи без специфики конкретного стека. Максимальная экономия контекста | Только фундаментальные глобальные скиллы качества |
 
 > [!NOTE]

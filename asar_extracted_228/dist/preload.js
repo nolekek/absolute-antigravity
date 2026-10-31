@@ -1727,6 +1727,7 @@ function injectControlCenterUI() {
             { id: "orchestrator", name: "Orchestrator & Multi-Agent", icon: "🎭", description: "Оркестрация субагентов, декомпозиция, параллелизм" },
             { id: "systems", name: "Systems & High-Perf", icon: "⚡", description: "C++, C, Zig, Rust, lock-free, память, SIMD, CMake" },
             { id: "vst3", name: "VST3 & Audio DSP Studio", icon: "🎛️", description: "VST3/VST3i плагины, JUCE C++, DSP, GUI дизайн" },
+            { id: "meta-dev", name: "Antigravity Core & Self-Dev", icon: "🛠️", description: "Ядро Antigravity, ASAR, мультиаккаунт, скиллы" },
             { id: "minimal", name: "Minimal Context", icon: "⚡", description: "Минимум системных токенов" }
         ];
 

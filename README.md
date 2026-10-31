@@ -50,8 +50,8 @@
 3. **Быстрому исчерпанию квот:** Каждый лишний токен в промпте ускоряет исчерпание лимитов TPM (Tokens Per Minute).
 
 **Решение модуля Control Center:**
-- Создана библиотека из **89 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
-- Реализована система из **13 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Systems, VST3, Minimal).
+- Создана библиотека из **90 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
+- Реализована система из **14 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Systems, VST3, Meta-Dev, Minimal).
 - Переключение происходит мгновенно на лету без перезапуска клиента через атомарный тогл файлов (`SKILL.md` ↔ `SKILL.md.disabled`).
 - Модель снабжена автономным дирижёром `agent-preset-conductor`, позволяющим ей **самостоятельно переключать пресет** под конкретную задачу.
 
@@ -59,7 +59,7 @@
 
 ### Каталог пресетов и матрица скиллов
 
-Библиотека включает **89 production-grade навыков**, распределённых по целевым пресетам:
+Библиотека включает **90 production-grade навыков**, распределённых по целевым пресетам:
 
 | Пресет | ID | Иконка | Состав навыков | Описание стека |
 |---|---|---|---|---|
@@ -75,6 +75,7 @@
 | **Orchestrator & Multi-Agent** | `orchestrator` | 🎭 | `subagent-orchestrator`, `hierarchical-task-decomposer`, `multi-agent-debate-consensus`, `context-synthesis-reducer`, `ai-agents-architect`, `prompt-engineering`, `context-window-management`, `agent-evaluation`, `langgraph`, `code-review-checklist`, `premortem-redteam`, `ai-product-partner` | Мультиагентная оркестрация, декомпозиция крупных проектов, субагенты с изолированными профилями пресетов, арбитраж консенсуса и верификация |
 | **Systems & High-Perf** | `systems` | ⚡ | `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `rust-systems-safe`, `memory-safety-patterns`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Modern C++20/C++23, C, Zig, Rust, RAII, ручное управление памятью, lock-free, SIMD, санитайзеры ASan/TSan, CMake и профилирование |
 | **VST3 & Audio DSP Studio** | `vst3` | 🎛️ | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Разработка VST3/VST3i плагинов, синтезаторов и DSP эффектов: JUCE C++, real-time audio thread safety, SIMD, аудио UI/UX дизайн |
+| **Antigravity Core & Self-Dev** | `meta-dev` | 🛠️ | `antigravity-core-dev`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `nodejs-best-practices`, `subagent-orchestrator` | Разработка ядра Antigravity: Electron ASAR сборка/деплой, мультиаккаунт, ранбук `antigravity-core-dev`, тесты и автоматизация |
 | **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` (+ глобальные скиллы) | Чистый контекст для свободных диалогов и максимальной скорости ответов |
 
 ---
