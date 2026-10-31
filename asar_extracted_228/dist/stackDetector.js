@@ -114,6 +114,38 @@ function detectProjectStack(workspacePath) {
                 skills: ["appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "agent-preset-conductor"]
             };
         }
+
+        // 5. VST3 / Audio DSP / JUCE
+        const isVst = fileSet.has("juce") || fileSet.has("vst3") || files.some(f => f.toLowerCase().endsWith(".vst3") || f.toLowerCase().endsWith(".jucer"));
+        let cmakeHasJuce = false;
+        if (fileSet.has("cmakelists.txt")) {
+            try {
+                const cmakeText = fs.readFileSync(path.join(workspacePath, "CMakeLists.txt"), "utf8").toLowerCase();
+                if (cmakeText.includes("juce") || cmakeText.includes("vst3") || cmakeText.includes("juce_add_plugin")) {
+                    cmakeHasJuce = true;
+                }
+            } catch (_) {}
+        }
+        if (isVst || cmakeHasJuce) {
+            return {
+                id: "vst3",
+                name: "VST3 & Audio DSP Studio",
+                icon: "🎛️",
+                description: "Разработка VST3/VST3i плагинов, JUCE C++, DSP синтезаторы и аудио UI",
+                skills: ["vst3-dsp-architect", "audio-plugin-ui-ux", "cpp-systems-architect", "agent-preset-conductor"]
+            };
+        }
+
+        // 6. Systems & High-Perf: C++, CMake, Ninja, Zig
+        if (fileSet.has("cmakelists.txt") || fileSet.has("meson.build") || fileSet.has("build.zig") || files.some(f => f.endsWith(".cpp") || f.endsWith(".hpp") || f.endsWith(".cc") || f.endsWith(".cxx") || f.endsWith(".zig"))) {
+            return {
+                id: "systems",
+                name: "Systems & High-Perf",
+                icon: "⚡",
+                description: "Modern C++20/C++23, C, Zig, lock-free, RAII, SIMD и профилирование",
+                skills: ["cpp-systems-architect", "systems-lowlevel-perf", "lockfree-concurrency-patterns", "agent-preset-conductor"]
+            };
+        }
     } catch (err) {
         console.error("[StackDetector] Error analyzing directory:", err);
     }

@@ -81,6 +81,18 @@ PRESET_SKILLS_MAP = {
         "context-window-management", "agent-evaluation", "langgraph",
         "code-review-checklist", "premortem-redteam", "ai-product-partner", "agent-preset-conductor"
     ],
+    "systems": [
+        "cpp-systems-architect", "systems-lowlevel-perf", "lockfree-concurrency-patterns",
+        "rust-systems-safe", "memory-safety-patterns", "test-driven-development",
+        "test-fixing", "code-review-checklist", "agent-preset-conductor"
+    ],
+    "vst3": [
+        "vst3-dsp-architect", "audio-plugin-ui-ux", "cpp-systems-architect",
+        "systems-lowlevel-perf", "lockfree-concurrency-patterns",
+        "subagent-orchestrator", "hierarchical-task-decomposer",
+        "test-driven-development", "test-fixing", "code-review-checklist",
+        "agent-preset-conductor"
+    ],
     "minimal": [
         "agent-preset-conductor", "ai-product-partner"
     ]

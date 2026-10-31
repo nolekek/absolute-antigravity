@@ -85,7 +85,27 @@ invoke_subagent({
 });
 ```
 
-После вызова `invoke_subagent` оркестратор **завершает свой ход** (yield turn). Система автоматически разбудит оркестратора, когда субагент пришлёт отчёт или завершит работу!
+#### ⚡ Параллельный веерный запуск (Concurrent Multi-Agent Fan-Out)
+Если этап или задача содержит независимые потоки работ (например, Backend API + Frontend UI, либо DevOps Action + QA Тестовый стенд), оркестратор **вызывает несколько `invoke_subagent` одновременно в рамках ОДНОГО хода**:
+```javascript
+// Поток 1: DevOps специалист
+invoke_subagent({
+  TypeName: "subagent-devops",
+  Role: "GitHub Actions & Delivery Engineer",
+  Workspace: "branch",
+  Prompt: "Реализуй Rich Step Summary и артефакты патчей в src/autoheal/delivery/..."
+});
+
+// Поток 2: QA & Benchmark специалист
+invoke_subagent({
+  TypeName: "subagent-qa",
+  Role: "QA Benchmark Engineer",
+  Workspace: "branch",
+  Prompt: "Создай синтетический тестовый стенд на 15 багов в tests/test_benchmarks.py..."
+});
+```
+
+После вызова `invoke_subagent` оркестратор **завершает свой ход** (yield turn). Система автоматически разбудит оркестратора, когда субагенты пришлют отчёты!
 
 ---
 

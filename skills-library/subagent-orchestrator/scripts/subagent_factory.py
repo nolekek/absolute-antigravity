@@ -141,6 +141,38 @@ PRESET_SKILLS = {
             "Deconstruct protocols, schemas, and assets without contaminating licensing boundaries.",
             "Maintain Section 5 Workspace Hygiene: zero disposable scripts in workspace root."
         ]
+    },
+    "systems": {
+        "name": "subagent-systems",
+        "role": "Senior Systems & High-Performance C++ Engineer",
+        "description": "Specialized Systems subagent equipped with Modern C++20/C++23, low-level optimization, lock-free concurrency, memory safety, SIMD, and ASan/TSan sanitizers",
+        "skills": [
+            "cpp-systems-architect", "systems-lowlevel-perf", "lockfree-concurrency-patterns",
+            "rust-systems-safe", "memory-safety-patterns", "test-driven-development",
+            "test-fixing", "code-review-checklist"
+        ],
+        "guidelines": [
+            "Enforce strict C++ Core Guidelines, RAII, Rule of Zero/Five, and memory safety.",
+            "Zero allocations and lock-free SPSC queues for latency-critical paths.",
+            "Verify builds with ASan/TSan/UBSan sanitizers and run benchmarks.",
+            "Maintain Section 5 Workspace Hygiene: zero disposable scripts in workspace root."
+        ]
+    },
+    "vst3": {
+        "name": "subagent-vst3",
+        "role": "Senior Audio DSP & VST3 Plugin Engineer",
+        "description": "Specialized Audio DSP subagent equipped with VST3/VST3i SDK, JUCE v7/v8, real-time audio thread safety, DSP algorithms, and audio UI/UX",
+        "skills": [
+            "vst3-dsp-architect", "audio-plugin-ui-ux", "cpp-systems-architect",
+            "systems-lowlevel-perf", "lockfree-concurrency-patterns",
+            "test-driven-development", "test-fixing", "code-review-checklist"
+        ],
+        "guidelines": [
+            "Real-time audio thread safety: zero allocations (malloc/new), zero system calls, zero mutexes on audio thread.",
+            "Master JUCE framework, modern LookAndFeel, and vector rotary sliders.",
+            "Validate plugins with Steinberg pluginval at strictness level 10.",
+            "Maintain Section 5 Workspace Hygiene: zero disposable scripts in workspace root."
+        ]
     }
 }
 

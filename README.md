@@ -50,8 +50,8 @@
 3. **Быстрому исчерпанию квот:** Каждый лишний токен в промпте ускоряет исчерпание лимитов TPM (Tokens Per Minute).
 
 **Решение модуля Control Center:**
-- Создана библиотека из **84 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
-- Реализована система из **11 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Minimal).
+- Создана библиотека из **89 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
+- Реализована система из **13 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Systems, VST3, Minimal).
 - Переключение происходит мгновенно на лету без перезапуска клиента через атомарный тогл файлов (`SKILL.md` ↔ `SKILL.md.disabled`).
 - Модель снабжена автономным дирижёром `agent-preset-conductor`, позволяющим ей **самостоятельно переключать пресет** под конкретную задачу.
 
@@ -59,7 +59,7 @@
 
 ### Каталог пресетов и матрица скиллов
 
-Библиотека включает **84 production-grade навыка**, распределённых по целевым пресетам:
+Библиотека включает **89 production-grade навыков**, распределённых по целевым пресетам:
 
 | Пресет | ID | Иконка | Состав навыков | Описание стека |
 |---|---|---|---|---|
@@ -73,6 +73,8 @@
 | **Reverse Engineering** | `reverse-engineering` | 🧬 | Полный Clean-Room цикл (11 скиллов `replica-*`) + `reverse-engineer-electron` | Реверс-инжиниринг чужих сервисов с нуля по чистой методологии (recon, architect, backend, design, build, test, deploy) |
 | **Product & Monetization** | `product` | 💎 | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` | Стратегия монетизации, юнит-экономика LTV/CAC, офферы (Hormozi), карточки товаров (маркетплейсы), конкурентный анализ и CRO |
 | **Orchestrator & Multi-Agent** | `orchestrator` | 🎭 | `subagent-orchestrator`, `hierarchical-task-decomposer`, `multi-agent-debate-consensus`, `context-synthesis-reducer`, `ai-agents-architect`, `prompt-engineering`, `context-window-management`, `agent-evaluation`, `langgraph`, `code-review-checklist`, `premortem-redteam`, `ai-product-partner` | Мультиагентная оркестрация, декомпозиция крупных проектов, субагенты с изолированными профилями пресетов, арбитраж консенсуса и верификация |
+| **Systems & High-Perf** | `systems` | ⚡ | `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `rust-systems-safe`, `memory-safety-patterns`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Modern C++20/C++23, C, Zig, Rust, RAII, ручное управление памятью, lock-free, SIMD, санитайзеры ASan/TSan, CMake и профилирование |
+| **VST3 & Audio DSP Studio** | `vst3` | 🎛️ | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Разработка VST3/VST3i плагинов, синтезаторов и DSP эффектов: JUCE C++, real-time audio thread safety, SIMD, аудио UI/UX дизайн |
 | **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` (+ глобальные скиллы) | Чистый контекст для свободных диалогов и максимальной скорости ответов |
 
 ---

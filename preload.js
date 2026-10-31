@@ -1725,6 +1725,8 @@ function injectControlCenterUI() {
             { id: "reverse-engineering", name: "Reverse Engineering & Replica", icon: "🧬", description: "11 скиллов Replica + ASAR реверс" },
             { id: "product", name: "Product & Monetization", icon: "💎", description: "Монетизация, офферы, карточки товаров, рынок" },
             { id: "orchestrator", name: "Orchestrator & Multi-Agent", icon: "🎭", description: "Оркестрация субагентов, декомпозиция, параллелизм" },
+            { id: "systems", name: "Systems & High-Perf", icon: "⚡", description: "C++, C, Zig, Rust, lock-free, память, SIMD, CMake" },
+            { id: "vst3", name: "VST3 & Audio DSP Studio", icon: "🎛️", description: "VST3/VST3i плагины, JUCE C++, DSP, GUI дизайн" },
             { id: "minimal", name: "Minimal Context", icon: "⚡", description: "Минимум системных токенов" }
         ];
 

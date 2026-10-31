@@ -16,8 +16,8 @@ This file defines mandatory workspace-level guardrails, architectural invariants
 
 ## 2. No "All-Inclusive" Preset
 - The `all` ("Все включено") preset is permanently retired to eliminate prompt bloat and context rot.
-- The system strictly maintains 11 focused presets:
-  `web`, `backend`, `devops`, `appsec`, `qa`, `ai-agents`, `web-research`, `reverse-engineering`, `product`, `orchestrator`, `minimal`.
+- The system strictly maintains 13 focused presets:
+  `web`, `backend`, `devops`, `appsec`, `qa`, `ai-agents`, `web-research`, `reverse-engineering`, `product`, `orchestrator`, `systems`, `vst3`, `minimal`.
 - Automatic fallback in `loadConfig()` must route invalid or legacy `all` configs to `minimal`.
 
 ---
@@ -58,3 +58,18 @@ The following 5 meta-skills are fundamental quality guardrails and must NEVER be
   4. Launch execution via `invoke_subagent` and yield the turn.
   5. Merge deliverables, review code, and verify with tests before reporting completion.
 - Writing feature implementation code in the orchestrator dialogue instead of delegating to subagents is a violation of the orchestrator role.
+
+### 6.1. Concurrent Multi-Agent Fan-Out Mandate
+- **Запрет искусственной последовательности**: Если этап или задача декомпозируется на две или более независимые подзадачи (например: Frontend UX + Backend API, Интеграция экшена + Синтетический бенчмарк-сьют, Парсер логов + Схемы данных):
+  - Оркестратор **ОБЯЗАН вызывать `invoke_subagent` для нескольких субагентов одновременно в рамках ОДНОГО хода**.
+  - Для параллельных субагентов, изменяющих код, использовать изоляцию `Workspace: 'branch'` или строго разграниченные файлы (MECE File Ownership).
+  - Завершать ход без лишних промежуточных действий, позволяя системе запустить субагентов в параллельном фоновом режиме.
+  - По возвращении результатов от всех параллельных агентов — проводить ревью diff'ов, разрешение конфликтов и единый прогон тестов.
+
+### 6.2. Anti-Single-Subagent Invariant & Focused Preset Routing
+- **Запрет одиночного субагента в Orchestrator**: Пресет `orchestrator` предназначен ИСКЛЮЧИТЕЛЬНО для:
+  1. Кросс-доменных задач, затрагивающих 2 и более области (например, Backend + Frontend, DevOps + QA).
+  2. Параллельного веерного запуска нескольких субагентов (Concurrent Multi-Agent Fan-Out).
+- **Прямое выполнение в целевом пресете**: Если текущая задача полностью укладывается в рамки ОДНОГО технического домена (например, только написать GitHub Action, только обновить CSS, только написать SQL-миграцию):
+  - Оркестратор **НЕ ДОЛЖЕН оставаться в `orchestrator` и спавнить одного субагента**.
+  - Агент **ОБЯЗАН переключить пресет** через `agent-preset-conductor` на специализированный (`devops`, `backend`, `web`, `qa` и т.д.) и выполнить задачу напрямую в основном диалоге со специализированными скиллами без лишних задержек и накладных расходов.

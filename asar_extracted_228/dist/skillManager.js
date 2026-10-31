@@ -120,6 +120,30 @@ const PRESETS = {
             "code-review-checklist", "premortem-redteam", "ai-product-partner", "agent-preset-conductor"
         ]
     },
+    "systems": {
+        id: "systems",
+        name: "Systems & High-Perf",
+        icon: "⚡",
+        description: "Modern C++20/C++23, C, Zig, Rust, RAII, ручное управление памятью, lock-free, SIMD, санитайзеры ASan/TSan, CMake и профилирование",
+        skills: [
+            "cpp-systems-architect", "systems-lowlevel-perf", "lockfree-concurrency-patterns",
+            "rust-systems-safe", "memory-safety-patterns", "test-driven-development",
+            "test-fixing", "code-review-checklist", "agent-preset-conductor"
+        ]
+    },
+    "vst3": {
+        id: "vst3",
+        name: "VST3 & Audio DSP Studio",
+        icon: "🎛️",
+        description: "Разработка VST3/VST3i плагинов, синтезаторов и DSP эффектов: JUCE C++, real-time audio thread safety, SIMD, аудио UI/UX дизайн и мультиагентная оркестрация",
+        skills: [
+            "vst3-dsp-architect", "audio-plugin-ui-ux", "cpp-systems-architect",
+            "systems-lowlevel-perf", "lockfree-concurrency-patterns",
+            "subagent-orchestrator", "hierarchical-task-decomposer",
+            "test-driven-development", "test-fixing", "code-review-checklist",
+            "agent-preset-conductor"
+        ]
+    },
     "minimal": {
         id: "minimal",
         name: "Minimal Context",
