@@ -1,6 +1,6 @@
 ---
 name: agent-preset-conductor
-description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, minimal), and activates the grill-me skill in disputable/ambiguous situations."
+description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, product, minimal), and activates the grill-me skill in disputable/ambiguous situations."
 ---
 
 # Agent Preset Conductor & Context Orchestrator
@@ -40,7 +40,7 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 
 ---
 
-## 🧭 МАТРИЦА 9 ПРЕСЕТОВ
+## 🧭 МАТРИЦА 10 ПРЕСЕТОВ
 | Пресет (`ID`) | Название | Маркеры технологий и задачи | Ключевые скиллы пресета |
 |---|---|---|---|
 | `web` | Web Modern | React, Next.js, Vue, Nuxt, Tailwind v4, CSS, HTML, UI/UX дизайн, frontend-design, Web Vitals, SEO, CRO форм, TanStack Query | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `seo-audit`, `form-cro` |
@@ -51,6 +51,7 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 | `ai-agents` | AI & MCP Engineering | Создание MCP серверов (Model Context Protocol), Prompt Engineering, RAG архитектура, управление контекстным окном, LangGraph, оценка агентов | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph` |
 | `web-research` | Web Research & OSINT | Высокоточный веб-поиск (native search), сбор данных, OSINT расследования, аналитика без мусора | `search-specialist`, `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator` |
 | `reverse-engineering` | Reverse Engineering & Replica | Полный Clean-Room цикл клонирования приложений (Replica pack: recon, architect, backend, design, build, test, deploy) + Electron ASAR | Полная пачка из 11 скиллов `replica-*` + `reverse-engineer-electron` |
+| `product` | Product & Monetization | Стратегия монетизации, тарифы/pricing, юнит-экономика LTV/CAC, карточки товаров, офферы, анализ рынка и конкурентов, CRO | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` |
 | `minimal` | Minimal Context | Свободный диалог, концептуальные обсуждения, задачи без специфики конкретного стека. Максимальная экономия контекста | Только фундаментальные глобальные скиллы качества |
 
 > [!NOTE]

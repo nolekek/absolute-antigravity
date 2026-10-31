@@ -74,7 +74,7 @@ const PRESETS = {
         skills: [
             "mcp-builder", "prompt-engineering", "rag-implementation",
             "context-window-management", "ai-agents-architect", "agent-evaluation",
-            "langgraph", "agent-preset-conductor", "ai-product-partner"
+            "langgraph", "browser", "fl-freelance-agent", "agent-preset-conductor", "ai-product-partner"
         ]
     },
     "web-research": {
@@ -94,6 +94,18 @@ const PRESETS = {
             "replica-build", "replica-deploy", "replica-design", "replica-diff",
             "replica-entrepreneur", "replica-launch", "replica-test",
             "reverse-engineer-electron", "agent-preset-conductor", "ai-product-partner"
+        ]
+    },
+    "product": {
+        id: "product",
+        name: "Product & Monetization",
+        icon: "💎",
+        description: "Стратегия монетизации, юнит-экономика, офферы, карточки товаров, анализ рынка, ценообразование и CRO",
+        skills: [
+            "product-monetization-strategy", "market-competitor-intelligence", "ai-product-partner",
+            "browser", "search-specialist", "deep-research-synthesizer",
+            "replica-entrepreneur", "replica-brand", "replica-launch",
+            "form-cro", "ui-ux-pro-max", "seo-audit", "agent-preset-conductor"
         ]
     },
     "minimal": {
@@ -364,7 +376,7 @@ class SkillManager {
         const key = (name || "").toLowerCase().trim();
         const presetObj = PRESETS[key];
         if (!presetObj) {
-            return { success: false, error: `Неизвестный пресет: "${name}". Доступные (9 пресетов): ${Object.keys(PRESETS).join(", ")}` };
+            return { success: false, error: `Неизвестный пресет: "${name}". Доступные (${Object.keys(PRESETS).length} пресетов): ${Object.keys(PRESETS).join(", ")}` };
         }
 
         const { skills } = this.getSkills(workspacePath);

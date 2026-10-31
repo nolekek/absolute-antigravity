@@ -50,7 +50,7 @@
 3. **Быстрому исчерпанию квот:** Каждый лишний токен в промпте ускоряет исчерпание лимитов TPM (Tokens Per Minute).
 
 **Решение модуля Control Center:**
-- Создана библиотека из **73 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
+- Создана библиотека из **80 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
 - Реализована система из **9 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Minimal).
 - Переключение происходит мгновенно на лету без перезапуска клиента через атомарный тогл файлов (`SKILL.md` ↔ `SKILL.md.disabled`).
 - Модель снабжена автономным дирижёром `agent-preset-conductor`, позволяющим ей **самостоятельно переключать пресет** под конкретную задачу.
@@ -59,7 +59,7 @@
 
 ### Каталог пресетов и матрица скиллов
 
-Библиотека включает **73 production-grade навыка**, распределённых по целевым пресетам:
+Библиотека включает **80 production-grade навыков**, распределённых по целевым пресетам:
 
 | Пресет | ID | Иконка | Состав навыков | Описание стека |
 |---|---|---|---|---|
@@ -68,9 +68,10 @@
 | **DevOps & Cloud** | `devops` | 🐳 | `incident-responder`, `deployment-procedures`, `aws-serverless`, `docker-container-master`, `k8s-manifest-generator`, `github-actions-ci-cd`, `terraform-iac-architect`, `observability-telemetry-guru` | Multi-stage Docker, K8s манифесты, CI/CD Actions, Terraform IaC, AWS Serverless, SRE реагирование и Zero-Downtime деплои |
 | **AppSec & Reversing** | `appsec` | 🛡️ | `top-web-vulnerabilities`, `api-security-best-practices`, `ethical-hacking-methodology`, `appsec-code-auditor`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `network-traffic-intercept`, `api-pentest-fuzzer` | OWASP Top-10, аудит безопасности API, этичный пентест, декомпиляция ASAR, безопасность Win32/PS, автоматизация рабочего стола Windows (Windows-MCP) и фаззинг |
 | **QA & Testing** | `qa` | 🧪 | `test-driven-development`, `test-fixing`, `code-review-checklist`, `playwright-e2e-guru`, `windows-desktop-control`, `unit-test-synthesizer`, `k6-load-testing-pro`, `api-contract-tester` | Playwright E2E тесты, автоматизация и тестирование рабочего стола Windows (Windows-MCP), TDD Red-Green-Refactor, исправление тестов, Code Review и k6 |
-| **AI & MCP Engineering** | `ai-agents` | 🤖 | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph` | Создание MCP серверов, RAG архитектура, промпт-инжиниринг, управление контекстным окном и LangGraph пайплайны |
+| **AI & MCP Engineering** | `ai-agents` | 🤖 | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph`, `browser`, `fl-freelance-agent` | Создание MCP серверов, RAG архитектура, промпт-инжиниринг, управление контекстным окном, браузерная автоматизация и LangGraph пайплайны |
 | **Web Research & OSINT** | `web-research` | 🔍 | `search-specialist`, `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator` | Высокоточный веб-поиск (native `search_web`), извлечение контента, OSINT и чистая аналитика без генерации лишних скриптов |
 | **Reverse Engineering** | `reverse-engineering` | 🧬 | Полный Clean-Room цикл (11 скиллов `replica-*`) + `reverse-engineer-electron` | Реверс-инжиниринг чужих сервисов с нуля по чистой методологии (recon, architect, backend, design, build, test, deploy) |
+| **Product & Monetization** | `product` | 💎 | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` | Стратегия монетизации, юнит-экономика LTV/CAC, офферы (Hormozi), карточки товаров (маркетплейсы), конкурентный анализ и CRO |
 | **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` (+ глобальные скиллы) | Чистый контекст для свободных диалогов и максимальной скорости ответов |
 
 ---

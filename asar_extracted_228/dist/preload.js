@@ -1723,6 +1723,7 @@ function injectControlCenterUI() {
             { id: "ai-agents", name: "AI & MCP Engineering", icon: "🤖", description: "MCP серверы, RAG, Prompt Eng, Agents" },
             { id: "web-research", name: "Web Research & OSINT", icon: "🔍", description: "Глубокий поиск, скрапинг, OSINT" },
             { id: "reverse-engineering", name: "Reverse Engineering & Replica", icon: "🧬", description: "11 скиллов Replica + ASAR реверс" },
+            { id: "product", name: "Product & Monetization", icon: "💎", description: "Монетизация, офферы, карточки товаров, рынок" },
             { id: "minimal", name: "Minimal Context", icon: "⚡", description: "Минимум системных токенов" }
         ];
 

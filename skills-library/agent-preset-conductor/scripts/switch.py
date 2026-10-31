@@ -57,7 +57,7 @@ PRESET_SKILLS_MAP = {
     "ai-agents": [
         "mcp-builder", "prompt-engineering", "rag-implementation",
         "context-window-management", "ai-agents-architect", "agent-evaluation",
-        "langgraph", "agent-preset-conductor", "ai-product-partner"
+        "langgraph", "browser", "fl-freelance-agent", "agent-preset-conductor", "ai-product-partner"
     ],
     "web-research": [
         "search-specialist", "deep-research-synthesizer", "web-scraper-harvester", 
@@ -68,6 +68,12 @@ PRESET_SKILLS_MAP = {
         "replica-build", "replica-deploy", "replica-design", "replica-diff", 
         "replica-entrepreneur", "replica-launch", "replica-test", 
         "reverse-engineer-electron", "agent-preset-conductor", "ai-product-partner"
+    ],
+    "product": [
+        "product-monetization-strategy", "market-competitor-intelligence", "ai-product-partner",
+        "browser", "search-specialist", "deep-research-synthesizer",
+        "replica-entrepreneur", "replica-brand", "replica-launch",
+        "form-cro", "ui-ux-pro-max", "seo-audit", "agent-preset-conductor"
     ],
     "minimal": [
         "agent-preset-conductor", "ai-product-partner"
@@ -167,7 +173,7 @@ def main():
 
     target_preset = sys.argv[1].strip().lower()
     if target_preset not in PRESET_SKILLS_MAP:
-        print(f"❌ Unknown preset: '{target_preset}'. Available (9 presets): {', '.join(valid_presets)}")
+        print(f"❌ Unknown preset: '{target_preset}'. Available ({len(PRESET_SKILLS_MAP)} presets): {', '.join(valid_presets)}")
         sys.exit(1)
 
     success = switch_preset(target_preset)
