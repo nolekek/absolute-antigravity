@@ -8,7 +8,7 @@ The agent MUST ALWAYS evaluate and follow the `agent-preset-conductor` workflow 
    At the start of EVERY user request, analyze the request to determine the required domain and tech stack.
 
 2. **Clear Domain Execution**:
-   If the domain is clear and unambiguous (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Minimal):
+   If the domain is clear and unambiguous (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Minimal):
    - Output the badge: `🎯 [Смена пресета: <Имя Пресета>] Причина: <технологии и цель задачи>`
    - Execute the switch script: `python "%USERPROFILE%\.gemini\config\skills\agent-preset-conductor\scripts\switch.py" <preset_name>`
    - Proceed with task execution using the newly active specialized tools.

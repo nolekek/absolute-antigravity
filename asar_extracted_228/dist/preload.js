@@ -1724,6 +1724,7 @@ function injectControlCenterUI() {
             { id: "web-research", name: "Web Research & OSINT", icon: "🔍", description: "Глубокий поиск, скрапинг, OSINT" },
             { id: "reverse-engineering", name: "Reverse Engineering & Replica", icon: "🧬", description: "11 скиллов Replica + ASAR реверс" },
             { id: "product", name: "Product & Monetization", icon: "💎", description: "Монетизация, офферы, карточки товаров, рынок" },
+            { id: "orchestrator", name: "Orchestrator & Multi-Agent", icon: "🎭", description: "Оркестрация субагентов, декомпозиция, параллелизм" },
             { id: "minimal", name: "Minimal Context", icon: "⚡", description: "Минимум системных токенов" }
         ];
 

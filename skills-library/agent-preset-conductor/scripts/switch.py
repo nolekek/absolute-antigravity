@@ -75,6 +75,12 @@ PRESET_SKILLS_MAP = {
         "replica-entrepreneur", "replica-brand", "replica-launch",
         "form-cro", "ui-ux-pro-max", "seo-audit", "agent-preset-conductor"
     ],
+    "orchestrator": [
+        "subagent-orchestrator", "hierarchical-task-decomposer", "multi-agent-debate-consensus",
+        "context-synthesis-reducer", "ai-agents-architect", "prompt-engineering",
+        "context-window-management", "agent-evaluation", "langgraph",
+        "code-review-checklist", "premortem-redteam", "ai-product-partner", "agent-preset-conductor"
+    ],
     "minimal": [
         "agent-preset-conductor", "ai-product-partner"
     ]

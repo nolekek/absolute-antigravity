@@ -108,6 +108,18 @@ const PRESETS = {
             "form-cro", "ui-ux-pro-max", "seo-audit", "agent-preset-conductor"
         ]
     },
+    "orchestrator": {
+        id: "orchestrator",
+        name: "Orchestrator & Multi-Agent",
+        icon: "🎭",
+        description: "Мультиагентная оркестрация, декомпозиция крупных проектов, параллельные субагенты с фиксированными пресетами, арбитраж и верификация",
+        skills: [
+            "subagent-orchestrator", "hierarchical-task-decomposer", "multi-agent-debate-consensus",
+            "context-synthesis-reducer", "ai-agents-architect", "prompt-engineering",
+            "context-window-management", "agent-evaluation", "langgraph",
+            "code-review-checklist", "premortem-redteam", "ai-product-partner", "agent-preset-conductor"
+        ]
+    },
     "minimal": {
         id: "minimal",
         name: "Minimal Context",
