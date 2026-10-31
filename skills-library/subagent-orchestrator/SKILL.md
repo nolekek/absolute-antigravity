@@ -1,6 +1,6 @@
 ---
 name: subagent-orchestrator
-description: "Master multi-agent orchestration skill for Antigravity. Drives large-scale projects by briefing users via grill-me, decomposing architecture into subtasks, dynamically defining specialized subagents with compiled preset profiles, managing asynchronous execution, milestone reporting, and conducting final verification."
+description: "Master multi-agent orchestration skill for Antigravity. Enforces strict delegation mandate (never write feature code directly in orchestrator mode), provides pre-compiled native subagent profiles with embedded <skills> blocks, manages asynchronous lifecycle, and conducts final verification."
 risk: low
 source: antigravity-orchestrator-core (Apache 2.0)
 date_added: 2026-10-31
@@ -12,86 +12,83 @@ The **Subagent Orchestrator** skill governs end-to-end execution of large, compl
 
 ---
 
-## 🏛️ Core Architectural Invariants
+## ⛔ ИНВАРИАНТ ОБЯЗАТЕЛЬНОГО ДЕЛЕГИРОВАНИЯ (MANDATORY DISPATCH)
 
-1. **Initial Alignment & Risk Briefing (`grill-me`)**:
-   - Before writing code or spawning subagents, the orchestrator MUST analyze risks, edge cases, and architectural trade-offs.
-   - Surface ambiguities and critical decisions to the user using the `grill-me` protocol (`ask_question` or structured dialog).
-   - Once the user aligns and confirms, proceed autonomously.
-
-2. **Subagent Preset Profile Compilation**:
-   - Subagents do NOT toggle global files in `~/.gemini/config/skills/` (preventing filesystem race conditions and context bleed).
-   - Instead, the orchestrator dynamically compiles the target preset's domain instructions, standards, and rules directly into the `SystemPrompt` parameter of `define_subagent`.
-
-3. **Hybrid Workspace Isolation**:
-   - `Workspace: 'inherit'`: Used for linear tasks, exploratory research, or read-only analysis.
-   - `Workspace: 'branch'` or `'share'`: Mandatory when multiple worker subagents perform parallel code edits, isolating git state and preventing file collisions until review and merge.
-
-4. **Autonomous Reactive Execution & Milestone Updates**:
-   - Do NOT poll or busy-wait. Workers communicate asynchronously via `send_message` or completion events.
-   - After each completed milestone, emit a concise user update:
-     `📢 [Этап завершен: <Имя Субагента>] <Результаты, артефакты и следующий шаг>`
-
-5. **Strict Pre-Merge Code Review & Test Verification**:
-   - No subagent work is committed or merged without inspection.
-   - Always run the master verification test runner (`node tests/run_all.js`) before claiming completion.
+> [!IMPORTANT]
+> **В режиме «Оркестратор» агенту КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать код реализации задач самостоятельно в основном диалоге.**
+>
+> Основной диалог принадлежит исключительно **Техлиду-Оркестратору**:
+> 1. Если поступила задача на реализацию функционала — оркестратор **ОБЯЗАН** декомпозировать её и запустить специализированных субагентов через `define_subagent` и `invoke_subagent`.
+> 2. Писать код через `write_file`/`edit_file` в основном диалоге допустимо **только** для сборки, разрешения конфликтов слияния и интеграционной склейки модулей.
+> 3. Самостоятельное написание фичи в основном контексте вместо запуска субагентов расценивается как срыв роли оркестратора.
 
 ---
 
-## 🔄 The 6-Phase Orchestration Lifecycle
+## 🧠 Как нативные субагенты Antigravity получают навыки
 
-### Phase 1: User Briefing & Alignment (grill-me)
-- Scan the user's requirements for ambiguities, breaking changes, or scope creep.
-- Formulate high-value questions via `ask_question` (one question per turn, `(Recommended)` first).
-- Present an architectural summary and risk warning before delegating work.
+В Antigravity субагенты создаются нативным инструментом `define_subagent` и запускаются через `invoke_subagent`.
+Чтобы субагент обладал полноценными предметными навыками (как в пресетах `backend`, `web`, `qa` и т.д.):
 
-### Phase 2: Hierarchical MECE Task Decomposition
-- Decompose the project into Mutually Exclusive, Collectively Exhaustive (MECE) subtasks.
-- Formulate explicit contract boundaries:
-  - File/folder ownership (which subagent edits which files).
-  - Data contracts (TypeScript interfaces, schemas, mock contracts).
-  - Verification criteria (which unit/integration tests must pass).
+1. **Встраивание блока `<skills>` в `SystemPrompt`**:
+   В `SystemPrompt` каждого субагента передаётся нативный блок `<skills>` с точными путями к `SKILL.md` в мастер-библиотеке (`C:/Users/Admin/.gemini/skills-library/<skill>/SKILL.md`).
+2. **Нативное распознавание модели**:
+   Базовая модель Antigravity (Gemini) обучена распознавать блок `<skills>` и автоматически открывает нужные файлы через `read_file` перед началом работы.
+3. **Изоляция и параллелизм**:
+   Субагенты не трогают файловые переключатели глобального пресета — каждый субагент изолирован и несёт свой набор навыков прямо в своём контексте.
 
-### Phase 3: Dynamic Subagent Registration (`define_subagent`)
-Compile the required preset persona into `define_subagent`:
+---
 
+## 🗂️ Каталог 8 предсобранных архетипов (`subagents_manifest.json`)
+
+В файле `skills-library/subagent-orchestrator/subagents_manifest.json` (а также `~/.gemini/skills-library/subagent-orchestrator/subagents_manifest.json`) уже скомпилированы готовые профили:
+
+| Имя типа (`TypeName`) | Роль | Встроенный набор навыков |
+|---|---|---|
+| `subagent-backend` | Senior Backend & Database Engineer | `database-design`, `api-design-principles`, `nodejs-best-practices`, `go-concurrency-patterns`, `postgres-dba-optimizer`, `fastapi-async-architect`, `go-highload-services`, `rust-systems-safe`, `redis-distributed-caching`, `kafka-event-streaming` |
+| `subagent-web` | Senior Frontend & Modern Web Engineer | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `seo-audit`, `form-cro`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `react-performance-opt`, `vue-nuxt-expert`, `web-state-query-master`, `web-performance-auditor` |
+| `subagent-qa` | Senior QA Automation & Test Engineer | `playwright-e2e-guru`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `unit-test-synthesizer`, `k6-load-testing-pro`, `api-contract-tester` |
+| `subagent-devops` | Senior DevOps & Cloud Infrastructure Engineer | `docker-container-master`, `k8s-manifest-generator`, `github-actions-ci-cd`, `terraform-iac-architect`, `incident-responder`, `deployment-procedures`, `aws-serverless`, `observability-telemetry-guru` |
+| `subagent-appsec` | Senior Application Security & Reverse Engineer | `top-web-vulnerabilities`, `api-security-best-practices`, `ethical-hacking-methodology`, `appsec-code-auditor`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `network-traffic-intercept`, `api-pentest-fuzzer`, `premortem-redteam` |
+| `subagent-product` | Product Partner & Monetization Strategist | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` |
+| `subagent-research` | Deep Web Researcher & OSINT Analyst | `search-specialist`, `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator` |
+| `subagent-reverse` | Clean-Room Reverse Engineering Specialist | 11 скиллов `replica-*` + `reverse-engineer-electron` |
+
+---
+
+## ⚡ Рецепт запуска субагента: 3 шага
+
+### Шаг 1: Прочитать манифест или скомпилировать профиль
+Оркестратор может прочитать готовый манифест через `read_file`:
+`skills-library/subagent-orchestrator/subagents_manifest.json`  
+(или вызвать фабрику: `python skills-library/subagent-orchestrator/scripts/subagent_factory.py <preset>`).
+
+### Шаг 2: Зарегистрировать субагента (`define_subagent`)
 ```javascript
-// Example: Registering a Backend Specialist Subagent
 define_subagent({
-  Name: "backend-specialist",
-  Description: "Specialist in PostgreSQL, highload APIs, and database schemas",
+  Name: "subagent-backend",
+  Description: "Specialized Backend subagent equipped with PostgreSQL, database design, FastAPI, Node.js, Go, Redis, and API principles skills",
   EnableWriteTools: true,
   EnableMCPTools: true,
-  EnableSubagentTools: false, // Prevent nested recursion
-  SystemPrompt: `
-You are a Senior Backend & Database Specialist operating under the 'backend' preset profile.
-Rules:
-- Enforce strict database normalization and migration integrity.
-- Build clean REST/FastAPI/Node.js endpoints adhering to contract types.
-- Follow Section 5 Workspace Hygiene: zero disposable scripts in root workspace.
-- Validate changes with tests before signaling completion.
-`
+  EnableSubagentTools: false, // Защита от неконтролируемой рекурсии
+  SystemPrompt: manifest["backend"]["SystemPrompt"]
 });
 ```
 
-### Phase 4: Subagent Invocation & Monitoring (`invoke_subagent`)
-- Invoke worker subagents:
-  ```javascript
-  invoke_subagent({
-    TypeName: "backend-specialist",
-    Role: "Database & API Engineer",
-    Workspace: "branch", // or "inherit" for linear flow
-    Model: "inherit",
-    Prompt: "Implement the OAuth account rotation endpoint and migration scripts as per CONTRACT.md."
-  });
-  ```
-- Yield turn without polling. The system will resume execution automatically when the subagent responds.
+### Шаг 3: Запустить выполнение задачи (`invoke_subagent`)
+```javascript
+invoke_subagent({
+  TypeName: "subagent-backend",
+  Role: "Senior Backend & Database Engineer",
+  Workspace: "inherit", // или "branch" при параллельном редактировании кода
+  Model: "inherit",
+  Prompt: "Разработай слой доступа к данным и схему таблиц для авторизации. Обрати внимание на навыки в <skills>."
+});
+```
 
-### Phase 5: Synthesis, Review & Conflict Resolution
-- Upon subagent completion, inspect the git diff and created artifacts.
-- Verify adherence to `code-review-checklist`.
-- Merge branch changes into the primary workspace branch cleanly.
+После вызова `invoke_subagent` оркестратор **завершает свой ход** (yield turn). Система автоматически разбудит оркестратора, когда субагент пришлёт отчёт или завершит работу!
 
-### Phase 6: Global Verification & Handover
-- Execute project verification (`node tests/run_all.js` or domain-specific test suites).
-- Generate a final delivery report summarizing changes, architecture, and verification proof.
+---
+
+## 📢 Уведомления о вехах
+Когда субагент возвращает сообщение с результатами, оркестратор сообщает пользователю:
+`📢 [Этап завершен: subagent-backend] Создана схема базы данных и миграции. Запускаем subagent-qa для E2E тестов.`

@@ -46,3 +46,15 @@ The following 5 meta-skills are fundamental quality guardrails and must NEVER be
 - **Zero Disposable Scripts in Workspace**: Agents must NEVER generate ad-hoc research, test, or scraping scripts (`.py`, `.js`, `.sh`, etc.) in the user's project root directory.
 - **Native Tools First**: For web searches, documentation lookups, and public web intelligence, ALWAYS utilize the native `search_web` tool over creating custom scrapers.
 - **Scratch Directory Mandate**: If exploratory scripts or local data parsing are strictly needed, store and run them exclusively in `<appDataDir>\brain\<conversation-id>\scratch\`, keeping the workspace pristine.
+
+---
+
+## 6. Mandatory Subagent Dispatch Invariant (Пресет Orchestrator)
+- **Zero In-Place Feature Coding**: When the active preset is `orchestrator`, the main agent is STRICTLY PROHIBITED from writing feature implementation code directly in the main conversation context.
+- **Mandatory Subagent Delegation**: The agent MUST act exclusively as Team Lead & Orchestrator:
+  1. Brief and align requirements with the user via `grill-me`.
+  2. Decompose the architecture into modular subtasks with clear file ownership.
+  3. Register specialized subagents (`define_subagent`) using the pre-compiled native profiles (`subagents_manifest.json`) or compiled preset profiles with embedded `<skills>` blocks.
+  4. Launch execution via `invoke_subagent` and yield the turn.
+  5. Merge deliverables, review code, and verify with tests before reporting completion.
+- Writing feature implementation code in the orchestrator dialogue instead of delegating to subagents is a violation of the orchestrator role.
