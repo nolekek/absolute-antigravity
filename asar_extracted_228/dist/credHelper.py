@@ -544,6 +544,50 @@ def delete_slot(slot_num):
 
     return get_status()
 
+def get_conversations_summary():
+    import sqlite3
+    import urllib.parse
+    db_path = os.path.expanduser('~/.gemini/antigravity/conversation_summaries.db')
+    if not os.path.exists(db_path):
+        return {"workspaces": [], "conversations": []}
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT conversation_id, title, workspace_uris, last_modified_time FROM conversation_summaries WHERE (parent_conversation_id IS NULL OR parent_conversation_id = '') ORDER BY last_modified_time DESC LIMIT 100")
+        rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        return {"workspaces": [], "conversations": [], "error": str(e)}
+
+    convs = []
+    ws_map = {}
+    for cid, title, ws_json, mtime in rows:
+        ws_clean = ""
+        ws_name = "Общий"
+        if ws_json:
+            try:
+                arr = json.loads(ws_json)
+                if arr and isinstance(arr, list) and arr[0].startswith("file:///"):
+                    raw_p = urllib.parse.unquote(arr[0][8:])
+                    if len(raw_p) > 2 and raw_p[1] == ":":
+                        raw_p = raw_p[0].upper() + raw_p[1:]
+                    ws_clean = os.path.normpath(raw_p)
+                    ws_name = os.path.basename(ws_clean) or ws_clean
+            except Exception:
+                pass
+        if ws_clean:
+            ws_map[ws_clean] = ws_map.get(ws_clean, 0) + 1
+        convs.append({
+            "id": cid,
+            "title": title or "Без названия",
+            "workspace": ws_clean,
+            "workspace_name": ws_name,
+            "mtime": mtime[:16] if mtime else ""
+        })
+
+    ws_list = [{"path": p, "name": os.path.basename(p) or p, "count": c} for p, c in sorted(ws_map.items(), key=lambda x: x[1], reverse=True)]
+    return {"workspaces": ws_list, "conversations": convs}
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         cmd = 'status'
@@ -571,5 +615,7 @@ if __name__ == '__main__':
     elif cmd in ('delete-slot', 'remove-account'):
         slot = sys.argv[2] if len(sys.argv) > 2 else None
         print(json.dumps(delete_slot(slot)))
+    elif cmd in ('conversations', 'list-conversations'):
+        print(json.dumps(get_conversations_summary(), ensure_ascii=False))
     else:
         print(json.dumps({'error': f'Unknown command: {cmd}'}))

@@ -966,6 +966,20 @@ class MultiaccManager {
         return { ok: false, error: "No window open" };
     }
 
+    async switchConversation(cid) {
+        if (!cid) return { ok: false, error: "conversationId is required" };
+        const wins = BrowserWindow.getAllWindows();
+        if (wins.length > 0) {
+            const win = wins[0];
+            if (win.isMinimized()) win.restore();
+            win.show();
+            win.focus();
+            win.webContents.send("notification:clicked", { cascadeId: cid });
+            return { ok: true, conversationId: cid };
+        }
+        return { ok: false, error: "No window open" };
+    }
+
     async newConversation() {
         const wins = BrowserWindow.getAllWindows();
         if (wins.length > 0) {
