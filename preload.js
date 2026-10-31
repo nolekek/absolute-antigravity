@@ -1032,56 +1032,7 @@ function injectControlCenterUI() {
             font-family: monospace;
         }
 
-        /* Smart Preset Banner */
-        #ag-cc-preset-banner {
-            position: fixed;
-            top: 42px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 999990;
-            background: rgba(30, 31, 34, 0.95);
-            backdrop-filter: blur(10px);
-            border: 1px solid #388bfd;
-            border-radius: 8px;
-            padding: 8px 14px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: 12px;
-            color: #e6edf3;
-            animation: agSlideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-        @keyframes agSlideDown {
-            from { opacity: 0; transform: translate(-50%, -12px); }
-            to { opacity: 1; transform: translate(-50%, 0); }
-        }
-        #ag-cc-preset-banner .btn {
-            border: none;
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-size: 11px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: 0.15s;
-        }
-        #ag-cc-preset-banner .btn-confirm {
-            background: #238636;
-            color: #ffffff;
-        }
-        #ag-cc-preset-banner .btn-confirm:hover { background: #2ea043; }
-        #ag-cc-preset-banner .btn-manual {
-            background: #30363d;
-            color: #c9d1d9;
-        }
-        #ag-cc-preset-banner .btn-manual:hover { background: #3c444d; color: #fff; }
-        #ag-cc-preset-banner .btn-close {
-            background: transparent;
-            color: #8b949e;
-            padding: 2px 5px;
-        }
-        #ag-cc-preset-banner .btn-close:hover { color: #f85149; }
+
 
         /* Drawer Overlay */
         #ag-cc-drawer-overlay {
@@ -1596,10 +1547,7 @@ function injectControlCenterUI() {
             renderSkills(currentSkills);
             renderMcp(currentMcp);
 
-            // Handle Smart Preset Suggestion Banner
-            if (data.recommendedPreset && !sessionStorage.getItem("ag_preset_banner_dismissed")) {
-                showPresetBanner(data.recommendedPreset);
-            }
+
         } catch (e) {
             console.error("[ControlCenterUI] Refresh failed:", e);
         }
@@ -1803,38 +1751,7 @@ function injectControlCenterUI() {
         }
     });
 
-    // Smart Preset Banner
-    function showPresetBanner(preset) {
-        if (document.getElementById("ag-cc-preset-banner")) return;
-        const banner = document.createElement("div");
-        banner.id = "ag-cc-preset-banner";
-        banner.innerHTML = `
-            <span>${preset.icon || "💡"} Обнаружен стек: <b>${preset.name}</b>. Утвердить пресет?</span>
-            <button class="btn btn-confirm" id="ag-banner-confirm">Подтвердить</button>
-            <button class="btn btn-manual" id="ag-banner-manual">Ручное управление</button>
-            <button class="btn btn-close" id="ag-banner-close">&times;</button>
-        `;
 
-        document.body.appendChild(banner);
-
-        document.getElementById("ag-banner-confirm")?.addEventListener("click", async () => {
-            await bridge.applyPreset(preset.skills || []);
-            banner.remove();
-            sessionStorage.setItem("ag_preset_banner_dismissed", "1");
-            refreshData();
-        });
-
-        document.getElementById("ag-banner-manual")?.addEventListener("click", () => {
-            banner.remove();
-            sessionStorage.setItem("ag_preset_banner_dismissed", "1");
-            toggleDrawer(true);
-        });
-
-        document.getElementById("ag-banner-close")?.addEventListener("click", () => {
-            banner.remove();
-            sessionStorage.setItem("ag_preset_banner_dismissed", "1");
-        });
-    }
 
     // Initial load
     refreshData();

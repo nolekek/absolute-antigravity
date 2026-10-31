@@ -520,7 +520,7 @@ function registerIpcHandlers(storageManager) {
 
             const skillsData = skillManager.getSkills(workspacePath);
             const mcpServers = mcpManager.getServers();
-            const recommendedPreset = detectProjectStack(workspacePath);
+            const recommendedPreset = null;
 
             return {
                 ...skillsData,
