@@ -29,6 +29,7 @@ build_installer/build/
 build_installer/dist/
 *.spec
 *.exe
+!binaries/**
 *-linux.sh
 app.asar.official_updated
 app.asar.patched_master

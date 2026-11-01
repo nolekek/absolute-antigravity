@@ -58,7 +58,7 @@ def stop_active_processes():
         except Exception:
             pass
 
-def locate_antigravity_paths():
+def locate_antigravity_paths(custom_path=None):
     user_home = os.path.expanduser("~")
     if IS_WINDOWS:
         local_app_data = os.environ.get("LOCALAPPDATA", "")
@@ -81,23 +81,40 @@ def locate_antigravity_paths():
         exe_name = "antigravity"
 
     program_dir = None
-    for cand in candidates:
-        if cand and os.path.exists(cand):
-            asar_test = os.path.join(cand, "resources", "app.asar")
-            if os.path.exists(asar_test):
-                program_dir = cand
-                break
+    if custom_path:
+        cand = os.path.abspath(custom_path.strip().strip('"'))
+        if os.path.exists(os.path.join(cand, "resources", "app.asar")):
+            program_dir = cand
+        elif os.path.exists(os.path.join(cand, "app.asar")):
+            program_dir = os.path.dirname(cand)
+        elif os.path.exists(cand):
+            program_dir = cand
+
+    if not program_dir:
+        for cand in candidates:
+            if cand and os.path.exists(cand):
+                asar_test = os.path.join(cand, "resources", "app.asar")
+                if os.path.exists(asar_test):
+                    program_dir = cand
+                    break
 
     if not program_dir:
         print(f"\n{Colors.YELLOW}[!] Папка установки Antigravity не определена автоматически.{Colors.RESET}")
-        user_path = input("Укажите путь к папке установки Antigravity: ").strip().strip('"')
+        try:
+            user_path = input("Укажите путь к папке установки Antigravity: ").strip().strip('"')
+        except (EOFError, KeyboardInterrupt):
+            user_path = ""
         if user_path and os.path.exists(os.path.join(user_path, "resources", "app.asar")):
             program_dir = user_path
+        elif user_path and os.path.exists(os.path.join(user_path, "app.asar")):
+            program_dir = os.path.dirname(user_path)
         else:
             print(f"{Colors.RED}[ERROR] Файл app.asar не найден по указанному пути.{Colors.RESET}")
             sys.exit(1)
 
     resources_dir = os.path.join(program_dir, "resources")
+    if not os.path.exists(resources_dir) and os.path.exists(os.path.join(program_dir, "app.asar")):
+        resources_dir = program_dir
     asar_path = os.path.join(resources_dir, "app.asar")
 
     return {
@@ -113,7 +130,7 @@ def locate_antigravity_paths():
         "user_home": user_home,
     }
 
-def install_tweaks():
+def install_tweaks(custom_path=None):
     print_banner()
 
     # Step 1: Process Safety
@@ -123,7 +140,7 @@ def install_tweaks():
 
     # Step 2: Paths & Directories
     print(f"\n{Colors.BOLD}[2/5] Определение путей установки...{Colors.RESET}")
-    paths = locate_antigravity_paths()
+    paths = locate_antigravity_paths(custom_path=custom_path)
     print(f"  {Colors.DIM}Клиент Antigravity:{Colors.RESET} {paths['program_dir']}")
     print(f"  {Colors.DIM}Системная папка твиков:{Colors.RESET} {paths['gemini_bin']}")
 
@@ -290,15 +307,20 @@ def install_tweaks():
   {Colors.BOLD}Что готово к работе:{Colors.RESET}
   1. 🔓 {Colors.CYAN}Обход геолокации:{Colors.RESET} сняты региональные ограничения в CLI, Manager и IDE.
   2. 👥 {Colors.CYAN}Мульти-аккаунты:{Colors.RESET} панель переключения аккаунтов добавлена в окно.
-  3. 🎛️ {Colors.CYAN}Control Center & Skills:{Colors.RESET} 9 специализированных пресетов и 70 навыков.
+  3. 📱 {Colors.CYAN}Мобильный Веб-Клиент:{Colors.RESET} LAN-панель на порту 51125 (чаты, квоты, артефакты).
+  4. 🎛️ {Colors.CYAN}Control Center & Skills:{Colors.RESET} 14 сфокусированных пресетов и 70 навыков.
   4. 🔌 {Colors.CYAN}Локальный мост:{Colors.RESET} поднят защищённый IPC-сервер http://127.0.0.1:51122.
   5. 🤖 {Colors.CYAN}Telegram Commander:{Colors.RESET} бот с квотами и историей готов в ~/.gemini/antigravity/bin/.
   6. 🛡️ {Colors.CYAN}Авто-защита:{Colors.RESET} сторожевой скрипт предотвратит сброс твиков при обновлениях.
 """)
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Antigravity Supercharged Tweaks & Eligibility Installer")
+    parser.add_argument("-p", "--path", help="Путь к папке установки Antigravity")
+    args = parser.parse_args()
     try:
-        install_tweaks()
+        install_tweaks(custom_path=args.path)
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}[!] Прервано пользователем.{Colors.RESET}")
         sys.exit(0)

@@ -167,12 +167,47 @@ for (const s of skills) {
 
 ---
 
-## 📦 Установка и запуск (CLI Guide)
+## 📦 Установка и запуск (Готовые патчеры и CLI Guide)
 
 > [!IMPORTANT]
 > Перед установкой обязательно закройте клиент Antigravity.
 
-### 1. Быстрая установка через CLI — Windows (PowerShell)
+### 🚀 Вариант А: Запуск скомпилированных патчеров в 1 клик (Standalone Binaries)
+
+В каталоге `binaries/` собраны автономные бинарники под Windows (PE `.exe`) и Linux (ELF x86_64). Они не требуют наличия Python, Node.js или каких-либо внешних зависимостей.
+
+#### 1. Windows (x64)
+- **Полная установка всех компонентов (Мульти-аккаунты, Веб-панель, Пресеты, Обход ограничений)**:
+  ```powershell
+  .\binaries\windows-x64\AntigravityTweaksInstaller.exe
+  # или из корня проекта:
+  .\AntigravityTweaksInstaller.exe
+  ```
+- **Только патчинг региональных ограничений (Eligibility Bypass)**:
+  ```powershell
+  .\binaries\windows-x64\antigravity-eligibility-patcher.exe patch
+  # Интерактивное меню:
+  .\binaries\windows-x64\antigravity-eligibility-patcher.exe
+  ```
+
+#### 2. Linux / WSL (x86_64 ELF)
+- **Полная установка всех компонентов (Мульти-аккаунты, Веб-панель, Пресеты, Обход ограничений)**:
+  ```bash
+  chmod +x binaries/linux-x64/*
+  ./binaries/linux-x64/antigravity-tweaks-installer
+  ```
+- **Только патчинг региональных ограничений (Eligibility Bypass)**:
+  ```bash
+  ./binaries/linux-x64/antigravity-eligibility-patcher patch
+  # Интерактивное меню:
+  ./binaries/linux-x64/antigravity-eligibility-patcher
+  ```
+
+---
+
+### 🛠️ Вариант Б: Ручная установка через CLI
+
+#### 1. Пошаговая установка — Windows (PowerShell)
 
 Откройте PowerShell в папке репозитория:
 
@@ -201,7 +236,7 @@ Start-Process "$env:LOCALAPPDATA\Programs\antigravity\Antigravity.exe"
 
 ---
 
-### 2. Быстрая установка через CLI — Linux / WSL (Bash)
+#### 2. Пошаговая установка — Linux / WSL (Bash)
 
 Откройте терминал Bash:
 
