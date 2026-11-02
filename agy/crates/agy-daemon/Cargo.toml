@@ -1,6 +1,6 @@
 [package]
 name = "agy-daemon"
-version = "3.0.0"
+version = "4.0.0"
 edition = "2021"
 authors = ["Antigravity Core Team"]
 description = "Background watchdog and IPC server daemon for Absolute Antigravity"

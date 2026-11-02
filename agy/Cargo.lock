@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agy-cli"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "agy-core",
  "agy-daemon",
@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "agy-core"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "agy-daemon"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "agy-core",
  "anyhow",

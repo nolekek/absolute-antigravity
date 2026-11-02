@@ -14,7 +14,7 @@ use agy_core::{
 #[derive(Parser)]
 #[command(
     name = "agy",
-    version = "3.0.0",
+    version = "4.0.0",
     about = "Autonomous Headless CLI for Absolute Antigravity",
     after_help = "Examples:\n  agy chat\n  agy chat --preset backend --model gemini-2.0-flash\n  cat code.rs | agy exec \"найди баги\"\n  agy exec \"Объясни модель владения в Rust\"\n  agy preset switch backend qa\n  agy preset switch web +qa +docker -w /path/to/project\n  agy preset list\n  agy account status\n  agy account rotate\n  agy account get-token\n  agy account export-env\n  agy project init --slot 2 --preset backend\n  agy daemon start"
 )]
