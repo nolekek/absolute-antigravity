@@ -23,6 +23,10 @@ struct Cli {
     #[arg(long, global = true, env = "AGY_SOCKET")]
     socket: Option<String>,
 
+    /// Self-contained portable mode (forces embedded daemon runner)
+    #[arg(long, global = true)]
+    portable: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -168,13 +172,15 @@ enum ProjectCommands {
     },
 }
 
+pub type DaemonAction = DaemonCommands;
+
 #[derive(Subcommand, Debug, Clone)]
-enum DaemonCommands {
+pub enum DaemonCommands {
     /// Start the background daemon
     Start {
         #[arg(long, default_value_t = false, help = "Run in foreground")]
         foreground: bool,
-        #[arg(long, default_value_t = false, help = "Disable web server auto-start")]
+        #[arg(short = 'w', long, default_value_t = false, help = "Disable web server auto-start")]
         no_web: bool,
         #[arg(long, default_value_t = false, help = "Do not open browser automatically")]
         no_open: bool,
@@ -187,6 +193,21 @@ enum DaemonCommands {
     Stop,
     /// Check daemon status
     Status,
+    /// Run the daemon directly in the current process (monolith mode)
+    Run {
+        #[arg(short = 'w', long, default_value_t = false, help = "Disable web server auto-start")]
+        no_web: bool,
+        #[arg(long, default_value_t = false, help = "Do not open browser automatically")]
+        no_open: bool,
+        #[arg(long, help = "Port for web dashboard server (default: 51125)")]
+        web_port: Option<u16>,
+        #[arg(long, help = "Host for web dashboard server (default: 0.0.0.0)")]
+        web_host: Option<String>,
+        #[arg(short, long, help = "Path to language server log file to watch")]
+        log_path: Option<PathBuf>,
+        #[arg(long, default_value_t = false, help = "Run in foreground")]
+        foreground: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -731,6 +752,29 @@ fn execute_daemon_stop(socket: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn execute_daemon_run(
+    no_web: bool,
+    no_open: bool,
+    web_port: Option<u16>,
+    web_host: Option<String>,
+    log_path: Option<PathBuf>,
+    socket: Option<&str>,
+) -> anyhow::Result<()> {
+    let args = agy_daemon::Args {
+        log_path,
+        ipc_path: socket.map(|s| s.to_string()),
+        socket: socket.map(|s| s.to_string()),
+        foreground: true,
+        no_web,
+        no_open,
+        web_port: web_port.unwrap_or(51125),
+        web_host: web_host.unwrap_or_else(|| "0.0.0.0".to_string()),
+    };
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(agy_daemon::run_daemon(args))
+}
+
 fn execute_daemon_start(
     foreground: bool,
     no_web: bool,
@@ -738,6 +782,7 @@ fn execute_daemon_start(
     web_port: Option<u16>,
     web_host: Option<String>,
     socket: Option<&str>,
+    portable: bool,
 ) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let is_running = rt.block_on(async {
@@ -760,24 +805,28 @@ fn execute_daemon_start(
         return Ok(());
     }
 
-    // Locate agy-daemon executable
+    // Locate agy-daemon executable or fall back to self (monolithic portable)
     let current_exe = std::env::current_exe()?;
-    let exe_dir = current_exe.parent().unwrap();
+    let exe_dir = current_exe.parent().unwrap_or_else(|| Path::new("."));
     let daemon_bin = exe_dir.join(if cfg!(windows) { "agy-daemon.exe" } else { "agy-daemon" });
 
-    if !daemon_bin.exists() {
-        println!(
-            "{} Could not find agy-daemon executable at: {}",
-            "❌".red().bold(),
-            daemon_bin.display()
-        );
-        return Ok(());
-    }
+    let use_self = portable || !daemon_bin.exists();
 
-    let mut cmd = std::process::Command::new(&daemon_bin);
-    if let Some(s) = socket {
-        cmd.arg("--socket").arg(s);
-    }
+    let mut cmd = if use_self {
+        let mut c = std::process::Command::new(&current_exe);
+        if let Some(s) = socket {
+            c.arg("--socket").arg(s);
+        }
+        c.arg("daemon").arg("run");
+        c
+    } else {
+        let mut c = std::process::Command::new(&daemon_bin);
+        if let Some(s) = socket {
+            c.arg("--socket").arg(s);
+        }
+        c
+    };
+
     if no_web {
         cmd.arg("--no-web");
     }
@@ -792,17 +841,24 @@ fn execute_daemon_start(
     }
 
     if foreground {
-        println!("Starting agy-daemon in foreground...");
+        println!("Starting agy-daemon in foreground{}...", if use_self { " (monolithic)" } else { "" });
         let mut child = cmd.spawn()?;
         child.wait()?;
     } else {
-        println!("Starting agy-daemon in background...");
+        println!("Starting agy-daemon in background{}...", if use_self { " (monolithic)" } else { "" });
 
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             // CREATE_NO_WINDOW (0x08000000) | DETACHED_PROCESS (0x00000008)
             cmd.creation_flags(0x08000000 | 0x00000008);
+        }
+
+        #[cfg(unix)]
+        {
+            cmd.stdin(std::process::Stdio::null());
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
         }
 
         let _ = cmd.spawn()?;
@@ -838,7 +894,11 @@ fn execute_daemon_start(
                 println!("  {}  {}", "🌐 Web Dashboard:".bold(), dash_url.cyan().bold());
             }
         } else {
-            println!("{} agy-daemon launched, but IPC did not respond within timeout.", "⚠️".yellow());
+            println!(
+                "{} agy-daemon process spawned, but IPC did not respond in time.",
+                "⚠️".yellow().bold()
+            );
+            println!("  Check language server logs or run with --foreground to inspect errors.");
         }
     }
 
@@ -1830,7 +1890,17 @@ fn main() -> anyhow::Result<()> {
                 web_port,
                 web_host,
             } => {
-                execute_daemon_start(foreground, no_web, no_open, web_port, web_host, socket)?;
+                execute_daemon_start(foreground, no_web, no_open, web_port, web_host, socket, cli.portable)?;
+            }
+            DaemonCommands::Run {
+                no_web,
+                no_open,
+                web_port,
+                web_host,
+                log_path,
+                foreground: _,
+            } => {
+                execute_daemon_run(no_web, no_open, web_port, web_host, log_path, socket)?;
             }
         },
         Commands::Web { action } => match action {
@@ -2093,5 +2163,44 @@ mod tests {
             },
             _ => panic!("Expected Commands::Daemon"),
         }
+    }
+
+    #[test]
+    fn test_daemon_run_command_parsing() {
+        let args = ["agy", "daemon", "run", "-w", "--no-open", "--web-port", "52000"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy daemon run'");
+        assert!(!cli.portable);
+        match cli.command {
+            Commands::Daemon { cmd } => match cmd {
+                DaemonCommands::Run {
+                    no_web,
+                    no_open,
+                    web_port,
+                    web_host,
+                    log_path,
+                    foreground,
+                } => {
+                    assert!(no_web);
+                    assert!(no_open);
+                    assert_eq!(web_port, Some(52000));
+                    assert_eq!(web_host, None);
+                    assert_eq!(log_path, None);
+                    assert!(!foreground);
+                }
+                _ => panic!("Expected DaemonCommands::Run"),
+            },
+            _ => panic!("Expected Commands::Daemon"),
+        }
+    }
+
+    #[test]
+    fn test_cli_portable_flag() {
+        let args = ["agy", "--portable", "daemon", "start"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy --portable daemon start'");
+        assert!(cli.portable);
+
+        let args2 = ["agy", "daemon", "start", "--portable"];
+        let cli2 = Cli::try_parse_from(args2).expect("Failed to parse 'agy daemon start --portable'");
+        assert!(cli2.portable);
     }
 }

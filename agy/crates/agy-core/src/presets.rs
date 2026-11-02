@@ -31,6 +31,8 @@ pub struct Preset {
 pub struct HybridRule {
     pub trigger: Vec<String>,
     pub compose: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -408,7 +410,9 @@ impl PresetManager {
     }
 
     pub fn load_default() -> Self {
-        Self::load_from_str(DEFAULT_PRESETS_YAML).expect("Embedded DEFAULT_PRESETS_YAML must be valid")
+        Self::load_from_str(crate::portable::EMBEDDED_PRESETS_YAML)
+            .or_else(|_| Self::load_from_str(DEFAULT_PRESETS_YAML))
+            .expect("Embedded presets YAML must be valid")
     }
 
     pub fn load_auto(config_path: Option<&Path>) -> Self {
@@ -420,7 +424,15 @@ impl PresetManager {
             }
         }
 
-        // Try ~/.gemini/config/presets.yaml
+        // 1. Try portable config directory: <base_dir>/config/presets.yaml
+        let portable_config = crate::portable::get_config_dir().join("presets.yaml");
+        if portable_config.exists() {
+            if let Ok(mgr) = Self::load_from_file(&portable_config) {
+                return mgr;
+            }
+        }
+
+        // 2. Try ~/.gemini/config/presets.yaml
         if let Some(home) = dirs_home() {
             let global_path = home.join(".gemini").join("config").join("presets.yaml");
             if global_path.exists() {
@@ -430,6 +442,7 @@ impl PresetManager {
             }
         }
 
+        // 3. Fallback to embedded presets
         Self::load_default()
     }
 
@@ -502,11 +515,24 @@ impl PresetManager {
 
         // 4. Check hybrid composition rules
         for rule in &self.manifest.hybrid_rules {
-            let matches_all = rule.trigger.iter().all(|trig| {
+            let mut matched_skills = BTreeSet::new();
+            let mut matches_all = true;
+
+            for trig in &rule.trigger {
                 let trig_clean = trig.to_lowercase();
-                all_preset_keys.contains(&trig_clean)
-                    || active_skills.iter().any(|s| s.to_lowercase().contains(&trig_clean))
-            });
+                if all_preset_keys.contains(&trig_clean) {
+                    continue;
+                }
+                if let Some(skill) = active_skills.iter().find(|s| {
+                    !matched_skills.contains(*s) && s.to_lowercase().contains(&trig_clean)
+                }) {
+                    matched_skills.insert(skill.clone());
+                } else {
+                    matches_all = false;
+                    break;
+                }
+            }
+
             if matches_all {
                 for comp in &rule.compose {
                     let comp_clean = comp.to_lowercase();

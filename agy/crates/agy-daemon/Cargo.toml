@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["Antigravity Core Team"]
 description = "Background watchdog and IPC server daemon for Absolute Antigravity"
 
+[lib]
+name = "agy_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "agy-daemon"
 path = "src/main.rs"
