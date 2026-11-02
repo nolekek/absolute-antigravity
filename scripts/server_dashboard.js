@@ -1,25 +1,27 @@
 #!/usr/bin/env node
 /**
  * ==============================================================================
- * Absolute Antigravity: Standalone Server Web Dashboard & UI Architect (v3.0)
+ * Absolute Antigravity: Standalone Modern AI Web Studio & Dashboard Server (v4.0)
  * ==============================================================================
  *
- * Full-featured remote management dashboard for Google Antigravity & agy core.
- * Allows managing development on a remote Linux/Unix/Windows server from any
- * device (mobile phone or desktop browser) worldwide.
+ * High-performance, zero-external-dependency remote management dashboard & IDE backend
+ * for Google Antigravity & agy core. Designed for local, LAN, and remote server access.
  *
- * Capabilities:
- *   1. Presets & Skills Management (16 presets, overlays, skills search)
- *   2. Multi-Account Carousel & Slots (status, rotation, quotas, failover)
- *   3. Interactive SSE Streaming Chat with Gemini (live markdown, slots, presets)
- *   4. Workspaces & Projects (.agy/config.json inspection, project init)
- *   5. Web Console / Terminal (executes agy CLI and dev commands with stdout/stderr)
- *   6. Session Logs & Brain Artifacts Explorer (live logs and rendered markdown)
+ * Core Capabilities:
+ *   1. Pure Node.js RFC 6455 WebSocket Interactive Terminal (PTY / interactive shell)
+ *   2. Native Antigravity Cascade Agent Streaming API (Connects to Language Server directly)
+ *   3. Workspace File Explorer & Safe Sandboxed Editor (Tree, Read, Write, Git Diff)
+ *   4. Presets & Skills Management (16 presets, overlays, dynamic switching)
+ *   5. Multi-Account Carousel & Slots (status, rotation, auto-failover)
+ *   6. Session Logs & Brain Artifacts Explorer
+ *   7. Web Studio UI (serves web/dist/index.html or built-in stylish Dark Studio SPA)
  *
  * Security:
- *   - 6-digit PIN code authentication (x-agy-pin or Authorization: Bearer <pin>)
- *   - Brute-Force Rate Limiting (5 failed attempts -> 15 min IP lockout)
- *   - Zero external npm/CDN dependencies (100% offline & self-contained)
+ *   - 6-digit cryptographic PIN stored in .agy/web_pin and ~/.gemini/antigravity/web_pin
+ *   - Session cookie / token generation upon successful PIN verification
+ *   - Brute-force defense: 5 failed PIN attempts -> 15-minute IP lock
+ *   - Localhost bypass allowed with PIN query parameter
+ *   - ZERO external npm dependencies (100% built-in Node.js modules)
  *
  * Usage:
  *   node scripts/server_dashboard.js [--host 0.0.0.0] [--port 51125] [--pin 123456] [--workspace /path]
@@ -33,12 +35,13 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
+const { EventEmitter } = require("events");
 const { spawn, exec, execFileSync } = require("child_process");
 
 // -----------------------------------------------------------------------------
 // Constants & Paths
 // -----------------------------------------------------------------------------
-const VERSION = "3.0.0";
+const VERSION = "4.0.0";
 const USER_HOME = os.homedir() || process.env.USERPROFILE || process.env.HOME || "";
 const GEMINI_DIR = path.join(USER_HOME, ".gemini");
 const ANTIGRAVITY_DIR = path.join(GEMINI_DIR, "antigravity");
@@ -46,12 +49,19 @@ const BRAIN_DIR = path.join(ANTIGRAVITY_DIR, "brain");
 const CONFIG_VAULT_PATH = path.join(GEMINI_DIR, "credentials_vault.json");
 const MULTIACC_CONFIG_PATH = path.join(GEMINI_DIR, "antigravity_multiacc.json");
 const SERVER_CONFIG_PATH = path.join(GEMINI_DIR, "antigravity_server_config.json");
+const WEB_CONFIG_PATH = path.join(GEMINI_DIR, "antigravity_web_config.json");
+
+// Excluded directories for File Explorer
+const EXCLUDE_DIRS = new Set([
+    "node_modules", ".git", "target", "dist", ".gemini", ".cargo",
+    "__pycache__", ".vscode", ".idea", "build", "obj", ".next", ".turbo"
+]);
 
 // -----------------------------------------------------------------------------
 // Activity Log Buffer (In-Memory Ring Buffer for Dashboard Activity)
 // -----------------------------------------------------------------------------
 const ACTIVITY_LOGS = [];
-const MAX_ACTIVITY_LOGS = 300;
+const MAX_ACTIVITY_LOGS = 500;
 
 function logActivity(level, category, message, meta = null) {
     const entry = {
@@ -121,10 +131,25 @@ function recordAuthSuccess(ip) {
 }
 
 // -----------------------------------------------------------------------------
-// Cryptographic PIN & Configuration
+// Cryptographic PIN Helpers
 // -----------------------------------------------------------------------------
 function generateSecurePin() {
     return String(crypto.randomInt(100000, 1000000));
+}
+
+function parseCookies(cookieHeader) {
+    const cookies = {};
+    if (!cookieHeader) return cookies;
+    const pairs = cookieHeader.split(";");
+    for (const pair of pairs) {
+        const idx = pair.indexOf("=");
+        if (idx !== -1) {
+            const key = pair.slice(0, idx).trim();
+            const val = pair.slice(idx + 1).trim();
+            cookies[key] = decodeURIComponent(val);
+        }
+    }
+    return cookies;
 }
 
 function getLanIps() {
@@ -152,49 +177,388 @@ function getPrimaryLanIp() {
 }
 
 // -----------------------------------------------------------------------------
-// CLI Binary & Tool Resolvers
+// Pure Node.js RFC 6455 WebSocket Implementation (Zero external npm dependencies)
 // -----------------------------------------------------------------------------
-function getAgyCliPath() {
-    const candidates = [
-        path.join(ANTIGRAVITY_DIR, "bin", process.platform === "win32" ? "agy.exe" : "agy"),
-        path.join(__dirname, "..", "agy", "target", "release", process.platform === "win32" ? "agy.exe" : "agy"),
-        path.join(__dirname, "..", "binaries", process.platform === "win32" ? "windows-x64/agy.exe" : "linux-x64/agy"),
-        "/usr/local/bin/agy",
-        "/opt/gemini/bin/agy"
-    ];
-    for (const c of candidates) {
-        if (c && fs.existsSync(c)) return c;
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+class RawWebSocket extends EventEmitter {
+    constructor(socket) {
+        super();
+        this.socket = socket;
+        this.isClosed = false;
+        this.buffer = Buffer.alloc(0);
+
+        socket.on("data", (chunk) => this._onData(chunk));
+        socket.on("close", () => this._onClose(1006, "Abnormal socket closure"));
+        socket.on("error", (err) => this.emit("error", err));
     }
-    try {
-        const whichCmd = process.platform === "win32" ? "where.exe" : "which";
-        const res = execFileSync(whichCmd, ["agy"], { encoding: "utf-8", timeout: 1000, windowsHide: true });
-        const firstLine = res.split(/\r?\n/)[0].trim();
-        if (firstLine && fs.existsSync(firstLine)) return firstLine;
-    } catch (_) {}
-    return null;
+
+    send(data) {
+        if (this.isClosed || !this.socket.writable) return;
+        const isBinary = Buffer.isBuffer(data) || data instanceof Uint8Array;
+        const payload = isBinary ? Buffer.from(data) : Buffer.from(String(data), "utf-8");
+        const opcode = isBinary ? 0x02 : 0x01;
+        const frame = RawWebSocket.createFrame(opcode, payload);
+        this.socket.write(frame);
+    }
+
+    ping() {
+        if (this.isClosed || !this.socket.writable) return;
+        const frame = RawWebSocket.createFrame(0x09, Buffer.alloc(0));
+        this.socket.write(frame);
+    }
+
+    close(code = 1000, reason = "") {
+        if (this.isClosed) return;
+        this.isClosed = true;
+        try {
+            const reasonBuf = Buffer.from(reason, "utf-8");
+            const payload = Buffer.alloc(2 + reasonBuf.length);
+            payload.writeUInt16BE(code, 0);
+            reasonBuf.copy(payload, 2);
+            const frame = RawWebSocket.createFrame(0x08, payload);
+            this.socket.write(frame, () => {
+                this.socket.end();
+            });
+        } catch (_) {
+            this.socket.destroy();
+        }
+    }
+
+    static createFrame(opcode, payload) {
+        const len = payload.length;
+        let header;
+        // Server-to-client frames MUST NOT be masked per RFC 6455 Section 5.1
+        if (len <= 125) {
+            header = Buffer.alloc(2);
+            header[0] = 0x80 | (opcode & 0x0f);
+            header[1] = len;
+        } else if (len <= 65535) {
+            header = Buffer.alloc(4);
+            header[0] = 0x80 | (opcode & 0x0f);
+            header[1] = 126;
+            header.writeUInt16BE(len, 2);
+        } else {
+            header = Buffer.alloc(10);
+            header[0] = 0x80 | (opcode & 0x0f);
+            header[1] = 127;
+            header.writeBigUInt64BE(BigInt(len), 2);
+        }
+        return Buffer.concat([header, payload]);
+    }
+
+    _onClose(code, reason) {
+        if (this.isClosed) return;
+        this.isClosed = true;
+        this.emit("close", code, reason);
+    }
+
+    _onData(chunk) {
+        this.buffer = Buffer.concat([this.buffer, chunk]);
+
+        while (this.buffer.length >= 2) {
+            const b0 = this.buffer[0];
+            const b1 = this.buffer[1];
+            const opcode = b0 & 0x0f;
+            const masked = (b1 & 0x80) !== 0;
+            let payloadLen = b1 & 0x7f;
+            let offset = 2;
+
+            if (payloadLen === 126) {
+                if (this.buffer.length < 4) return;
+                payloadLen = this.buffer.readUInt16BE(2);
+                offset = 4;
+            } else if (payloadLen === 127) {
+                if (this.buffer.length < 10) return;
+                payloadLen = Number(this.buffer.readBigUInt64BE(2));
+                offset = 10;
+            }
+
+            let maskKey = null;
+            if (masked) {
+                if (this.buffer.length < offset + 4) return;
+                maskKey = this.buffer.slice(offset, offset + 4);
+                offset += 4;
+            }
+
+            if (this.buffer.length < offset + payloadLen) return;
+
+            let payload = this.buffer.slice(offset, offset + payloadLen);
+            this.buffer = this.buffer.slice(offset + payloadLen);
+
+            if (masked && maskKey) {
+                const unmasked = Buffer.alloc(payloadLen);
+                for (let i = 0; i < payloadLen; i++) {
+                    unmasked[i] = payload[i] ^ maskKey[i % 4];
+                }
+                payload = unmasked;
+            }
+
+            if (opcode === 0x08) { // Close
+                let code = 1000;
+                let reason = "";
+                if (payload.length >= 2) {
+                    code = payload.readUInt16BE(0);
+                    reason = payload.slice(2).toString("utf-8");
+                }
+                this.close(code, reason);
+                this._onClose(code, reason);
+                return;
+            } else if (opcode === 0x09) { // Ping
+                const pong = RawWebSocket.createFrame(0x0a, payload);
+                this.socket.write(pong);
+            } else if (opcode === 0x0a) { // Pong
+                // keepalive heartbeat
+            } else if (opcode === 0x01) { // Text
+                this.emit("message", payload.toString("utf-8"), false);
+            } else if (opcode === 0x02) { // Binary
+                this.emit("message", payload, true);
+            }
+        }
+    }
 }
 
-function getPythonPath() {
-    const cmds = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];
-    for (const cmd of cmds) {
+// -----------------------------------------------------------------------------
+// Native Antigravity Cascade Agent & Language Server Integration
+// -----------------------------------------------------------------------------
+function mapToAntigravityModel(model) {
+    if (!model) return "MODEL_PLACEHOLDER_M318";
+    const lower = String(model).toLowerCase().trim().replace(/^models\//, "");
+
+    switch (lower) {
+        case "gemini-3.8-flash-high":
+        case "flash":
+        case "fast":
+        case "3.8":
+        case "flash-high":
+            return "MODEL_PLACEHOLDER_M318";
+        case "gemini-2.5-pro":
+        case "pro":
+        case "deep":
+        case "2.5-pro":
+            return "MODEL_GOOGLE_GEMINI_2_5_PRO";
+        case "claude-sonnet-4-6":
+        case "sonnet":
+        case "claude-sonnet":
+            return "MODEL_PLACEHOLDER_M35";
+        case "claude-opus-4-6-thinking":
+        case "opus":
+        case "claude-opus":
+            return "MODEL_PLACEHOLDER_M26";
+        case "gemini-2.5-flash":
+        case "flash-lite":
+        case "lite":
+            return "MODEL_GOOGLE_GEMINI_2_5_FLASH";
+        case "gemini-3.8-flash-medium":
+            return "MODEL_PLACEHOLDER_M319";
+        case "gemini-3.8-flash-low":
+            return "MODEL_PLACEHOLDER_M320";
+        default:
+            if (lower.startsWith("model_")) {
+                return lower.toUpperCase();
+            }
+            return "MODEL_PLACEHOLDER_M318";
+    }
+}
+
+function getLanguageServerSession() {
+    // 1. Env vars
+    const envPort = parseInt(process.env.AGY_LS_PORT || process.env.JETSKI_LS_PORT, 10);
+    const envCsrf = process.env.AGY_LS_CSRF;
+    if (envPort > 0 && envCsrf) {
+        return { port: envPort, csrf: envCsrf, pid: null, source: "env" };
+    }
+
+    // 2. active_session.json in ~/.gemini/antigravity or AppData
+    const candidates = [
+        path.join(USER_HOME, ".gemini", "antigravity", "active_session.json"),
+        path.join(USER_HOME, "AppData", "Roaming", "Antigravity", "active_session.json"),
+        path.join(USER_HOME, ".gemini", "active_session.json")
+    ];
+    for (const sessionFile of candidates) {
+        if (fs.existsSync(sessionFile)) {
+            try {
+                const session = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
+                if (session && session.port > 0 && session.csrf) {
+                    return {
+                        port: session.port,
+                        csrf: session.csrf,
+                        pid: session.pid || null,
+                        source: "active_session.json"
+                    };
+                }
+            } catch (_) {}
+        }
+    }
+
+    // 3. Process detection & Log inspection (Windows)
+    if (process.platform === "win32") {
         try {
-            execFileSync(cmd, ["--version"], { stdio: "ignore", windowsHide: true });
-            return cmd;
+            const cmd = 'Get-CimInstance Win32_Process -Filter "Name like \'language_server%\'" | Select-Object -ExpandProperty CommandLine';
+            const out = execFileSync("powershell", ["-NoProfile", "-Command", cmd], {
+                encoding: "utf-8",
+                timeout: 3000,
+                windowsHide: true
+            });
+            const csrfMatch = out.match(/--csrf_token\s+([a-f0-9\-]+)/i);
+            if (csrfMatch) {
+                const csrf = csrfMatch[1];
+                const logCandidates = [
+                    path.join(USER_HOME, "AppData", "Roaming", "Antigravity", "logs", "language_server.log"),
+                    path.join(USER_HOME, ".gemini", "antigravity", "language_server.log"),
+                    path.join(USER_HOME, ".gemini", "language_server.log")
+                ];
+                for (const logPath of logCandidates) {
+                    if (fs.existsSync(logPath)) {
+                        const content = fs.readFileSync(logPath, "utf-8");
+                        const portMatches = content.match(/listening on (?:\w+ )?port at (\d+) for HTTP\b/gi);
+                        if (portMatches && portMatches.length > 0) {
+                            const lastMatch = portMatches[portMatches.length - 1];
+                            const num = lastMatch.match(/(\d+)/);
+                            if (num) {
+                                return {
+                                    port: parseInt(num[1], 10),
+                                    csrf,
+                                    pid: null,
+                                    source: "process_log"
+                                };
+                            }
+                        }
+                    }
+                }
+            }
         } catch (_) {}
     }
-    return "python";
+
+    return null;
 }
 
-function getCredHelperPath() {
-    const candidates = [
-        path.join(__dirname, "credHelper.py"),
-        path.join(__dirname, "..", "credHelper.py"),
-        path.join(ANTIGRAVITY_DIR, "credHelper.py")
-    ];
-    for (const c of candidates) {
-        if (c && fs.existsSync(c)) return c;
+function lsRpcRequest(port, csrf, serviceMethod, payload) {
+    return new Promise((resolve, reject) => {
+        const body = JSON.stringify(payload);
+        const req = http.request({
+            hostname: "127.0.0.1",
+            port,
+            path: `/exa.language_server_pb.LanguageServerService/${serviceMethod}`,
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(body),
+                "x-codeium-csrf-token": csrf
+            },
+            timeout: 10000
+        }, (res) => {
+            let data = "";
+            res.on("data", c => { data += c; });
+            res.on("end", () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    return reject(new Error(`Language Server RPC ${serviceMethod} returned HTTP ${res.statusCode}: ${data}`));
+                }
+                try {
+                    const parsed = JSON.parse(data || "{}");
+                    resolve(parsed);
+                } catch (e) {
+                    reject(new Error(`Failed to parse RPC response: ${e.message} (raw: ${data})`));
+                }
+            });
+        });
+        req.on("error", reject);
+        req.on("timeout", () => {
+            req.destroy();
+            reject(new Error(`Language Server RPC ${serviceMethod} timed out`));
+        });
+        req.write(body);
+        req.end();
+    });
+}
+
+// -----------------------------------------------------------------------------
+// Workspace File Explorer & Sandboxing API
+// -----------------------------------------------------------------------------
+function getMimeType(filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    const map = {
+        ".js": "application/javascript",
+        ".mjs": "application/javascript",
+        ".cjs": "application/javascript",
+        ".ts": "text/typescript",
+        ".tsx": "text/typescript",
+        ".jsx": "text/javascript",
+        ".json": "application/json",
+        ".html": "text/html",
+        ".htm": "text/html",
+        ".css": "text/css",
+        ".md": "text/markdown",
+        ".py": "text/x-python",
+        ".rs": "text/x-rust",
+        ".yaml": "text/yaml",
+        ".yml": "text/yaml",
+        ".sh": "application/x-sh",
+        ".bash": "application/x-sh",
+        ".ps1": "text/plain",
+        ".txt": "text/plain",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".ico": "image/x-icon"
+    };
+    return map[ext] || "text/plain";
+}
+
+function scanFsTree(baseDir, currentRel = "", depth = 0, maxDepth = 5) {
+    if (depth > maxDepth) return [];
+    const fullDir = path.resolve(baseDir, currentRel);
+    if (!fs.existsSync(fullDir)) return [];
+
+    let entries;
+    try {
+        entries = fs.readdirSync(fullDir, { withFileTypes: true });
+    } catch (_) {
+        return [];
     }
-    return null;
+
+    const result = [];
+    for (const ent of entries) {
+        if (EXCLUDE_DIRS.has(ent.name)) continue;
+        const relPath = currentRel ? path.join(currentRel, ent.name) : ent.name;
+        const normalizedRel = relPath.replace(/\\/g, "/");
+
+        if (ent.isDirectory()) {
+            const children = scanFsTree(baseDir, relPath, depth + 1, maxDepth);
+            result.push({
+                name: ent.name,
+                path: normalizedRel,
+                isDir: true,
+                size: 0,
+                ext: "",
+                children
+            });
+        } else if (ent.isFile()) {
+            let size = 0;
+            try {
+                const st = fs.statSync(path.join(fullDir, ent.name));
+                size = st.size;
+            } catch (_) {}
+            result.push({
+                name: ent.name,
+                path: normalizedRel,
+                isDir: false,
+                size,
+                ext: path.extname(ent.name).toLowerCase()
+            });
+        }
+    }
+
+    // Sort: directories first, then alphabetical
+    result.sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+    });
+
+    return result;
 }
 
 // -----------------------------------------------------------------------------
@@ -399,7 +763,30 @@ function getActivePreset(targetWorkspace = null) {
     return "orchestrator";
 }
 
+function getAgyCliPath() {
+    const candidates = [
+        path.join(ANTIGRAVITY_DIR, "bin", process.platform === "win32" ? "agy.exe" : "agy"),
+        path.join(__dirname, "..", "agy", "target", "release", process.platform === "win32" ? "agy.exe" : "agy"),
+        path.join(__dirname, "..", "binaries", process.platform === "win32" ? "windows-x64/agy.exe" : "linux-x64/agy"),
+        "/usr/local/bin/agy",
+        "/opt/gemini/bin/agy"
+    ];
+    for (const c of candidates) {
+        if (c && fs.existsSync(c)) return c;
+    }
+    try {
+        const whichCmd = process.platform === "win32" ? "where.exe" : "which";
+        const res = execFileSync(whichCmd, ["agy"], { encoding: "utf-8", timeout: 1000, windowsHide: true });
+        const firstLine = res.split(/\r?\n/)[0].trim();
+        if (firstLine && fs.existsSync(firstLine)) return firstLine;
+    } catch (_) {}
+    return null;
+}
+
 function applyPreset(presetName, overlays = [], targetWorkspace = null) {
+    const ws = targetWorkspace ? path.resolve(targetWorkspace) : process.cwd();
+
+    // 1. Try agy CLI
     const agyBin = getAgyCliPath();
     if (agyBin) {
         try {
@@ -410,36 +797,75 @@ function applyPreset(presetName, overlays = [], targetWorkspace = null) {
                 args.push(...overlays.trim().split(/\s+/));
             }
             if (targetWorkspace) {
-                args.push("-w", targetWorkspace);
+                args.push("-w", ws);
             }
             const out = execFileSync(agyBin, args, {
                 encoding: "utf-8",
                 timeout: 5000,
                 windowsHide: true,
-                cwd: targetWorkspace || process.cwd()
+                cwd: ws
             });
             return { ok: true, method: "agy-cli", output: out.trim() };
         } catch (err) {
-            logActivity("warn", "Preset", `agy CLI switch failed: ${err.message}, trying fallback`);
+            logActivity("warn", "Preset", `agy CLI switch failed: ${err.message}, fallback to internal`);
         }
     }
 
+    // 2. Try skillManager.js
     try {
         const smPath = path.join(__dirname, "..", "skillManager.js");
         if (fs.existsSync(smPath)) {
             const { skillManager } = require(smPath);
-            const res = skillManager.applyPresetByName(presetName, targetWorkspace || process.cwd());
+            const res = skillManager.applyPresetByName(presetName, ws);
             return { ok: res.success, method: "skillManager", result: res };
         }
+    } catch (_) {}
+
+    // 3. Direct config update
+    try {
+        const agyDir = path.join(ws, ".agy");
+        fs.mkdirSync(agyDir, { recursive: true });
+        const cfgFile = path.join(agyDir, "config.json");
+        let cfg = {};
+        if (fs.existsSync(cfgFile)) {
+            try { cfg = JSON.parse(fs.readFileSync(cfgFile, "utf-8")); } catch (_) {}
+        }
+        cfg.preset = presetName;
+        cfg.overlays = Array.isArray(overlays) ? overlays : [];
+        cfg.updated_at = new Date().toISOString();
+        fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2), "utf-8");
+        return { ok: true, method: "direct-config", preset: presetName };
     } catch (e) {
         return { ok: false, error: e.message };
     }
-    return { ok: true, method: "memory", preset: presetName };
 }
 
 // -----------------------------------------------------------------------------
 // Account Slots & Credentials Resolver
 // -----------------------------------------------------------------------------
+function getPythonPath() {
+    const cmds = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];
+    for (const cmd of cmds) {
+        try {
+            execFileSync(cmd, ["--version"], { stdio: "ignore", windowsHide: true });
+            return cmd;
+        } catch (_) {}
+    }
+    return "python";
+}
+
+function getCredHelperPath() {
+    const candidates = [
+        path.join(__dirname, "credHelper.py"),
+        path.join(__dirname, "..", "credHelper.py"),
+        path.join(ANTIGRAVITY_DIR, "credHelper.py")
+    ];
+    for (const c of candidates) {
+        if (c && fs.existsSync(c)) return c;
+    }
+    return null;
+}
+
 function getAccountSlotsStatus() {
     const pythonCmd = getPythonPath();
     const helperPath = getCredHelperPath();
@@ -465,7 +891,6 @@ function getAccountSlotsStatus() {
         }
     }
 
-    // Direct read from ~/.gemini/credentials_vault.json
     if (fs.existsSync(CONFIG_VAULT_PATH)) {
         try {
             const vault = JSON.parse(fs.readFileSync(CONFIG_VAULT_PATH, "utf-8"));
@@ -559,34 +984,6 @@ function getRecentWorkspaces(currentWs) {
         });
     }
 
-    const pythonCmd = getPythonPath();
-    const helperPath = getCredHelperPath();
-    if (helperPath) {
-        try {
-            const out = execFileSync(pythonCmd, [helperPath, "conversations"], {
-                encoding: "utf-8",
-                timeout: 3000,
-                windowsHide: true
-            });
-            const data = JSON.parse(out);
-            if (Array.isArray(data.workspaces)) {
-                for (const w of data.workspaces) {
-                    if (w.path && fs.existsSync(w.path)) {
-                        const norm = path.resolve(w.path);
-                        if (!wsMap.has(norm)) {
-                            wsMap.set(norm, {
-                                path: norm,
-                                name: w.name || path.basename(norm),
-                                count: w.count || 1,
-                                isCurrent: norm === path.resolve(currentWs)
-                            });
-                        }
-                    }
-                }
-            }
-        } catch (_) {}
-    }
-
     const prjPath = path.join(GEMINI_DIR, "projects.json");
     if (fs.existsSync(prjPath)) {
         try {
@@ -653,9 +1050,7 @@ function initWorkspaceProject(wsPath, slot = null, preset = null) {
             if (preset) args.push("-p", String(preset));
             const out = execFileSync(agyBin, args, { encoding: "utf-8", timeout: 5000, windowsHide: true });
             return { ok: true, method: "agy-cli", output: out.trim() };
-        } catch (err) {
-            logActivity("warn", "Workspace", `agy project init failed: ${err.message}, writing directly`);
-        }
+        } catch (_) {}
     }
 
     try {
@@ -705,6 +1100,7 @@ function getLogs(type = "server_dashboard", linesCount = 100, currentWs = null) 
             candidates.push(path.join(currentWs, ".gemini", "language_server.log"));
         }
         candidates.push(
+            path.join(USER_HOME, "AppData", "Roaming", "Antigravity", "logs", "language_server.log"),
             path.join(GEMINI_DIR, "language_server.log"),
             path.join(ANTIGRAVITY_DIR, "language_server.log")
         );
@@ -792,9 +1188,6 @@ function getArtifactContent(cid, name) {
     return fs.readFileSync(full, "utf-8");
 }
 
-// -----------------------------------------------------------------------------
-// Daemon Status Check
-// -----------------------------------------------------------------------------
 function getDaemonStatus() {
     const agyBin = getAgyCliPath();
     if (agyBin) {
@@ -834,41 +1227,159 @@ class ServerDashboard {
         this.workspace = path.resolve(options.workspace || process.cwd());
         this.server = null;
         this.startTime = Date.now();
-        this.activeSessions = new Set();
+        this.activeSessions = new Map(); // token -> { createdAt, expiresAt, ip }
         this.initPin();
     }
 
     initPin() {
-        if (!this.pin) {
-            if (fs.existsSync(SERVER_CONFIG_PATH)) {
-                try {
-                    const cfg = JSON.parse(fs.readFileSync(SERVER_CONFIG_PATH, "utf-8"));
-                    if (cfg.pin && /^\d{6}$/.test(String(cfg.pin).trim())) {
-                        this.pin = String(cfg.pin).trim();
-                    }
-                } catch (_) {}
-            }
+        if (this.pin && /^\d{6}$/.test(String(this.pin).trim())) {
+            this.pin = String(this.pin).trim();
+            this.persistPin();
+            return;
         }
-        if (!this.pin || !/^\d{6}$/.test(String(this.pin).trim())) {
-            this.pin = generateSecurePin();
+
+        // 1. Check workspace .agy/web_pin
+        const wsPinFile = path.join(this.workspace, ".agy", "web_pin");
+        if (fs.existsSync(wsPinFile)) {
             try {
-                fs.mkdirSync(path.dirname(SERVER_CONFIG_PATH), { recursive: true });
-                fs.writeFileSync(SERVER_CONFIG_PATH, JSON.stringify({ pin: this.pin, port: this.port }, null, 2), "utf-8");
+                const val = fs.readFileSync(wsPinFile, "utf-8").trim();
+                if (/^\d{6}$/.test(val)) {
+                    this.pin = val;
+                    this.persistPin();
+                    return;
+                }
             } catch (_) {}
         }
+
+        // 2. Check ~/.gemini/antigravity/web_pin
+        const globalPinFile = path.join(ANTIGRAVITY_DIR, "web_pin");
+        if (fs.existsSync(globalPinFile)) {
+            try {
+                const val = fs.readFileSync(globalPinFile, "utf-8").trim();
+                if (/^\d{6}$/.test(val)) {
+                    this.pin = val;
+                    this.persistPin();
+                    return;
+                }
+            } catch (_) {}
+        }
+
+        // 3. Check ~/.gemini/antigravity_server_config.json
+        if (fs.existsSync(SERVER_CONFIG_PATH)) {
+            try {
+                const cfg = JSON.parse(fs.readFileSync(SERVER_CONFIG_PATH, "utf-8"));
+                if (cfg.pin && /^\d{6}$/.test(String(cfg.pin).trim())) {
+                    this.pin = String(cfg.pin).trim();
+                    this.persistPin();
+                    return;
+                }
+            } catch (_) {}
+        }
+
+        // 4. Generate new secure 6-digit PIN
+        this.pin = generateSecurePin();
+        this.persistPin();
+    }
+
+    persistPin() {
+        // Workspace .agy/web_pin
+        try {
+            const wsAgy = path.join(this.workspace, ".agy");
+            fs.mkdirSync(wsAgy, { recursive: true });
+            fs.writeFileSync(path.join(wsAgy, "web_pin"), this.pin, "utf-8");
+        } catch (_) {}
+
+        // Global ~/.gemini/antigravity/web_pin
+        try {
+            fs.mkdirSync(ANTIGRAVITY_DIR, { recursive: true });
+            fs.writeFileSync(path.join(ANTIGRAVITY_DIR, "web_pin"), this.pin, "utf-8");
+        } catch (_) {}
+
+        // Config JSONs
+        try {
+            fs.mkdirSync(path.dirname(SERVER_CONFIG_PATH), { recursive: true });
+            fs.writeFileSync(SERVER_CONFIG_PATH, JSON.stringify({ pin: this.pin, port: this.port }, null, 2), "utf-8");
+        } catch (_) {}
+        try {
+            fs.mkdirSync(path.dirname(WEB_CONFIG_PATH), { recursive: true });
+            fs.writeFileSync(WEB_CONFIG_PATH, JSON.stringify({ pin: this.pin, port: this.port, allowLan: true }, null, 2), "utf-8");
+        } catch (_) {}
+    }
+
+    isValidSessionToken(token) {
+        if (!token || typeof token !== "string") return false;
+        const cleanToken = token.trim();
+        const session = this.activeSessions.get(cleanToken);
+        if (!session) return false;
+        if (session.expiresAt && session.expiresAt < Date.now()) {
+            this.activeSessions.delete(cleanToken);
+            return false;
+        }
+        return true;
+    }
+
+    checkAuth(req) {
+        const clientIp = getClientIp(req);
+        const isLocalhost = (clientIp === "127.0.0.1" || clientIp === "::1" || clientIp === "::ffff:127.0.0.1");
+
+        // 1. Check direct PIN headers
+        const candidatePin = req.headers["x-agy-pin"] || req.headers["x-dashboard-pin"];
+        if (candidatePin && String(candidatePin).trim() === String(this.pin).trim()) {
+            return true;
+        }
+
+        // 2. Check Authorization header (Bearer <token_or_pin>)
+        const authHeader = req.headers["authorization"];
+        if (authHeader) {
+            const val = authHeader.replace(/^Bearer\s+/i, "").trim();
+            if (val === String(this.pin).trim()) return true;
+            if (this.isValidSessionToken(val)) return true;
+        }
+
+        // 3. Check x-agy-token header
+        const tokenHeader = req.headers["x-agy-token"];
+        if (tokenHeader && this.isValidSessionToken(tokenHeader)) {
+            return true;
+        }
+
+        // 4. Check Cookie header
+        const cookieHeader = req.headers["cookie"];
+        if (cookieHeader) {
+            const cookies = parseCookies(cookieHeader);
+            if (cookies.agy_pin && String(cookies.agy_pin).trim() === String(this.pin).trim()) return true;
+            if (cookies.agy_token && this.isValidSessionToken(cookies.agy_token)) return true;
+        }
+
+        // 5. Check URL query params (pin=... or token=...)
+        try {
+            const parsed = new URL(req.url, "http://127.0.0.1");
+            const qPin = parsed.searchParams.get("pin");
+            const qToken = parsed.searchParams.get("token");
+            if (qPin && String(qPin).trim() === String(this.pin).trim()) {
+                return true;
+            }
+            if (qToken && this.isValidSessionToken(qToken)) {
+                return true;
+            }
+            if (isLocalhost && qPin === this.pin) {
+                return true;
+            }
+        } catch (_) {}
+
+        return false;
     }
 
     printBanner() {
         const lanIp = getPrimaryLanIp();
-        const line = "=".repeat(72);
+        const line = "=".repeat(74);
         console.log("\n" + line);
-        console.log("  🚀 ABSOLUTE ANTIGRAVITY - SERVER WEB DASHBOARD & UI (v" + VERSION + ")");
-        console.log("  Headless Remote Development Gateway for Mobile & Desktop");
+        console.log("  🚀 ABSOLUTE ANTIGRAVITY - MODERN AI WEB STUDIO & SERVER (v" + VERSION + ")");
+        console.log("  Headless Remote Development Gateway for Mobile, Desktop & Web UI");
         console.log(line);
-        console.log("  ╔════════════════════════════════════════════════════════════════════╗");
-        console.log(`  ║  🔑 ACCESS PIN CODE:  \x1b[1m\x1b[32m${this.pin}\x1b[0m                                      ║`);
-        console.log("  ╚════════════════════════════════════════════════════════════════════╝");
-        console.log("  Enter this 6-digit PIN in your browser to unlock dashboard controls.\n");
+        console.log("  ╔══════════════════════════════════════════════════════════════════════════╗");
+        console.log(`  ║  🔑 ACCESS PIN CODE:  \x1b[1m\x1b[32m${this.pin}\x1b[0m                                            ║`);
+        console.log("  ╚══════════════════════════════════════════════════════════════════════════╝");
+        console.log("  Enter this 6-digit PIN in your browser to unlock dashboard & studio controls.\n");
         console.log("  🌐 Access URLs:");
         console.log(`     * Localhost:    \x1b[36mhttp://127.0.0.1:${this.port}\x1b[0m`);
         if (lanIp !== "127.0.0.1") {
@@ -880,30 +1391,14 @@ class ServerDashboard {
         console.log(line + "\n");
     }
 
-    checkAuth(req) {
-        const authHeader = req.headers["authorization"]
-            ? req.headers["authorization"].replace(/^Bearer\s+/i, "")
-            : null;
-        const candidate = req.headers["x-agy-pin"] || req.headers["x-dashboard-pin"] || authHeader;
-        if (candidate && String(candidate).trim() === String(this.pin).trim()) {
-            return true;
-        }
-
-        // Check query parameter (useful for EventSource / SSE if needed)
-        try {
-            const parsed = new URL(req.url, "http://127.0.0.1");
-            const qPin = parsed.searchParams.get("pin") || parsed.searchParams.get("token");
-            if (qPin && String(qPin).trim() === String(this.pin).trim()) {
-                return true;
-            }
-        } catch (_) {}
-
-        return false;
-    }
-
     start() {
         return new Promise((resolve, reject) => {
             this.server = http.createServer((req, res) => this.handleRequest(req, res));
+
+            // Upgrade handler for pure Node.js RFC 6455 WebSockets
+            this.server.on("upgrade", (req, socket, head) => {
+                this.handleUpgrade(req, socket, head);
+            });
 
             this.server.on("error", (err) => {
                 logActivity("error", "Server", `Failed to bind ${this.host}:${this.port}: ${err.message}`);
@@ -914,9 +1409,8 @@ class ServerDashboard {
                 this.printBanner();
                 logActivity("info", "Server", `Listening on http://${this.host}:${this.port}`);
                 try {
-                    const pidDir = path.join(USER_HOME, ".gemini", "antigravity");
-                    fs.mkdirSync(pidDir, { recursive: true });
-                    fs.writeFileSync(path.join(pidDir, "web.pid"), String(process.pid), "utf-8");
+                    fs.mkdirSync(ANTIGRAVITY_DIR, { recursive: true });
+                    fs.writeFileSync(path.join(ANTIGRAVITY_DIR, "web.pid"), String(process.pid), "utf-8");
                 } catch (_) {}
                 resolve(this);
             });
@@ -929,7 +1423,7 @@ class ServerDashboard {
                 this.server.close(() => {
                     logActivity("info", "Server", "Dashboard server stopped");
                     try {
-                        const pidFile = path.join(USER_HOME, ".gemini", "antigravity", "web.pid");
+                        const pidFile = path.join(ANTIGRAVITY_DIR, "web.pid");
                         if (fs.existsSync(pidFile)) {
                             const cur = fs.readFileSync(pidFile, "utf-8").trim();
                             if (cur === String(process.pid)) {
@@ -945,6 +1439,117 @@ class ServerDashboard {
         });
     }
 
+    // -------------------------------------------------------------------------
+    // WebSocket Upgrade & Terminal Handler
+    // -------------------------------------------------------------------------
+    handleUpgrade(req, socket, head) {
+        const parsedUrl = new URL(req.url, "http://127.0.0.1");
+        const pathname = parsedUrl.pathname;
+
+        if (pathname === "/ws/terminal") {
+            if (!this.checkAuth(req)) {
+                socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\nUnauthorized\r\n");
+                socket.destroy();
+                return;
+            }
+
+            const secKey = req.headers["sec-websocket-key"];
+            if (!secKey) {
+                socket.destroy();
+                return;
+            }
+
+            const acceptKey = crypto.createHash("sha1").update(secKey + WS_GUID).digest("base64");
+            const responseHeaders = [
+                "HTTP/1.1 101 Switching Protocols",
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                `Sec-WebSocket-Accept: ${acceptKey}`,
+                "\r\n"
+            ];
+            socket.write(responseHeaders.join("\r\n"));
+
+            const ws = new RawWebSocket(socket);
+            if (head && head.length > 0) {
+                ws._onData(head);
+            }
+
+            this.handleTerminalWebSocket(ws);
+            return;
+        }
+
+        socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        socket.destroy();
+    }
+
+    handleTerminalWebSocket(ws) {
+        logActivity("info", "Terminal", `WebSocket terminal connected from client`);
+        const isWin = process.platform === "win32";
+        const shellCmd = isWin ? "powershell.exe" : (process.env.SHELL || "/bin/bash");
+        const shellArgs = isWin ? ["-NoLogo"] : ["-i"];
+
+        let shell;
+        try {
+            shell = spawn(shellCmd, shellArgs, {
+                cwd: this.workspace,
+                env: {
+                    ...process.env,
+                    TERM: "xterm-256color",
+                    COLORTERM: "truecolor",
+                    PS1: "\u001b[36magy-studio\u001b[0m:\u001b[32m\\w\u001b[0m$ "
+                },
+                windowsHide: true
+            });
+        } catch (err) {
+            ws.send(`\r\n[Failed to spawn shell ${shellCmd}: ${err.message}]\r\n`);
+            ws.close(1011, err.message);
+            return;
+        }
+
+        shell.stdout.on("data", chunk => ws.send(chunk.toString("utf-8")));
+        shell.stderr.on("data", chunk => ws.send(chunk.toString("utf-8")));
+
+        ws.on("message", (msg) => {
+            if (typeof msg === "string") {
+                try {
+                    if (msg.trim().startsWith("{") && msg.trim().endsWith("}")) {
+                        const parsed = JSON.parse(msg);
+                        if (parsed.type === "resize") {
+                            logActivity("info", "Terminal", `Terminal resize: cols=${parsed.cols}, rows=${parsed.rows}`);
+                            return;
+                        }
+                        if (parsed.type === "stdin") {
+                            shell.stdin.write(parsed.data || "");
+                            return;
+                        }
+                    }
+                } catch (_) {}
+                shell.stdin.write(msg);
+            } else if (Buffer.isBuffer(msg)) {
+                shell.stdin.write(msg);
+            }
+        });
+
+        ws.on("close", () => {
+            logActivity("info", "Terminal", "Terminal WebSocket closed by client");
+            try { shell.kill(); } catch (_) {}
+        });
+
+        shell.on("close", (code) => {
+            logActivity("info", "Terminal", `Terminal shell process exited with code ${code}`);
+            ws.close(1000, `Shell exited with code ${code}`);
+        });
+
+        shell.on("error", (err) => {
+            logActivity("error", "Terminal", `Terminal shell error: ${err.message}`);
+            ws.send(`\r\n[Shell Error: ${err.message}]\r\n`);
+            ws.close(1011, err.message);
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // HTTP Request Dispatcher
+    // -------------------------------------------------------------------------
     handleRequest(req, res) {
         const clientIp = getClientIp(req);
         const parsedUrl = new URL(req.url, "http://127.0.0.1");
@@ -953,7 +1558,7 @@ class ServerDashboard {
         // CORS & Security Headers
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-agy-pin, Authorization");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-agy-pin, x-dashboard-pin, x-agy-token, Authorization, Cookie");
         res.setHeader("X-Content-Type-Options", "nosniff");
 
         if (req.method === "OPTIONS") {
@@ -973,17 +1578,54 @@ class ServerDashboard {
         };
 
         // ---------------------------------------------------------------------
-        // Public UI SPA Endpoints
+        // Public UI SPA & Static Asset Serving (web/dist or built-in Studio)
         // ---------------------------------------------------------------------
-        if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
-            sendHtml(this.renderHtml());
-            return;
+        const candidateDistDirs = [
+            path.join(__dirname, "..", "web", "dist"),
+            path.join(__dirname, "dist"),
+            path.join(__dirname),
+            path.join(process.cwd(), "web", "dist"),
+            path.join(process.cwd(), "dist")
+        ];
+        let distDir = null;
+        for (const cand of candidateDistDirs) {
+            try {
+                if (fs.existsSync(path.join(cand, "index.html"))) {
+                    distDir = cand;
+                    break;
+                }
+            } catch (_) {}
         }
+        const distIndexExists = distDir !== null;
 
-        if (req.method === "GET" && pathname === "/favicon.ico") {
-            res.writeHead(204);
-            res.end();
-            return;
+        if (!pathname.startsWith("/api/") && !pathname.startsWith("/ws/")) {
+            if (distIndexExists) {
+                let relPath = pathname.slice(1);
+                if (!relPath || relPath === "index.html") {
+                    relPath = "index.html";
+                }
+                const targetPath = path.resolve(distDir, relPath);
+                if (targetPath.startsWith(distDir) && fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
+                    res.writeHead(200, { "Content-Type": `${getMimeType(targetPath)}; charset=utf-8` });
+                    fs.createReadStream(targetPath).pipe(res);
+                    return;
+                }
+                // Client-side route fallback to web/dist/index.html
+                res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+                fs.createReadStream(path.join(distDir, "index.html")).pipe(res);
+                return;
+            } else {
+                // Built-in Studio Fallback
+                if (pathname === "/" || pathname === "/index.html") {
+                    sendHtml(this.renderHtml());
+                    return;
+                }
+                if (pathname === "/favicon.ico") {
+                    res.writeHead(204);
+                    res.end();
+                    return;
+                }
+            }
         }
 
         // ---------------------------------------------------------------------
@@ -1011,15 +1653,21 @@ class ServerDashboard {
                     const suppliedPin = data.pin || req.headers["x-agy-pin"] || "";
                     if (String(suppliedPin).trim() === String(this.pin).trim()) {
                         recordAuthSuccess(clientIp);
-                        const token = crypto.createHmac("sha256", this.pin).update(`${clientIp}:${Date.now()}`).digest("hex");
-                        this.activeSessions.add(token);
+                        const token = crypto.randomBytes(32).toString("hex");
+                        const expiresIn = 86400; // 24 hours
+                        this.activeSessions.set(token, {
+                            createdAt: Date.now(),
+                            expiresAt: Date.now() + expiresIn * 1000,
+                            ip: clientIp
+                        });
                         logActivity("info", "Auth", `Successful authentication from IP ${clientIp}`);
+                        res.setHeader("Set-Cookie", `agy_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${expiresIn}`);
                         sendJson(200, {
                             ok: true,
                             user: "admin",
                             token,
                             pin: this.pin,
-                            expiresIn: 86400
+                            expiresIn
                         });
                     } else {
                         const failRes = recordAuthFailure(clientIp);
@@ -1047,7 +1695,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // Guard all /api/* endpoints with Rate-Limit & PIN
+        // Guard all /api/* endpoints with Rate-Limit & PIN / Token
         // ---------------------------------------------------------------------
         if (pathname.startsWith("/api/")) {
             const limitCheck = checkRateLimit(clientIp);
@@ -1075,7 +1723,7 @@ class ServerDashboard {
                         error: `IP заблокирован на 15 минут. Повторите через ${failRes.retryAfter} сек.`
                     }));
                 } else {
-                    sendJson(401, { ok: false, error: "Требуется авторизация (PIN-код)" });
+                    sendJson(401, { ok: false, error: "Требуется авторизация (PIN-код или session token)" });
                 }
                 return;
             } else {
@@ -1084,7 +1732,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // GET /api/state - Complete System & Gateway Status
+        // GET /api/state - System & Gateway Status
         // ---------------------------------------------------------------------
         if (req.method === "GET" && pathname === "/api/state") {
             const slotsData = getAccountSlotsStatus();
@@ -1092,6 +1740,7 @@ class ServerDashboard {
             const presets = getAllPresets();
             const wsInfo = inspectWorkspace(this.workspace);
             const daemon = getDaemonStatus();
+            const lsSession = getLanguageServerSession();
 
             sendJson(200, {
                 ok: true,
@@ -1113,13 +1762,352 @@ class ServerDashboard {
                 activeSlot: slotsData.activeSlot,
                 currentEmail: slotsData.currentEmail,
                 autoFailover: slotsData.autoFailover,
-                daemon
+                daemon,
+                languageServer: {
+                    active: !!lsSession,
+                    port: lsSession ? lsSession.port : 0,
+                    source: lsSession ? lsSession.source : "none"
+                }
             });
             return;
         }
 
         // ---------------------------------------------------------------------
-        // GET /api/presets - All 16 Presets & Skills Catalog
+        // GET /api/cascade/status - Language Server Cascade Agent Health
+        // ---------------------------------------------------------------------
+        if (req.method === "GET" && pathname === "/api/cascade/status") {
+            const ls = getLanguageServerSession();
+            if (ls) {
+                sendJson(200, {
+                    ok: true,
+                    active: true,
+                    port: ls.port,
+                    csrf: ls.csrf ? "present" : "missing",
+                    pid: ls.pid || null,
+                    source: ls.source,
+                    health: "ONLINE"
+                });
+            } else {
+                sendJson(200, {
+                    ok: false,
+                    active: false,
+                    port: 0,
+                    health: "OFFLINE",
+                    message: "No active Antigravity Language Server session detected in active_session.json or env"
+                });
+            }
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // POST /api/chat/stream - Native Antigravity Cascade Agent Streaming
+        // ---------------------------------------------------------------------
+        if (req.method === "POST" && pathname === "/api/chat/stream") {
+            let body = "";
+            req.on("data", c => { body += c; });
+            req.on("end", async () => {
+                try {
+                    const data = JSON.parse(body || "{}");
+                    const prompt = data.prompt;
+                    if (!prompt || !prompt.trim()) {
+                        sendJson(400, { ok: false, error: "Field 'prompt' is required" });
+                        return;
+                    }
+
+                    const model = data.model || "gemini-3.8-flash-high";
+                    const mappedModel = mapToAntigravityModel(model);
+                    const systemPrompt = data.systemPrompt || null;
+                    const history = Array.isArray(data.history) ? data.history : [];
+
+                    res.writeHead(200, {
+                        "Content-Type": "text/event-stream; charset=utf-8",
+                        "Cache-Control": "no-cache, no-transform",
+                        "Connection": "keep-alive",
+                        "Access-Control-Allow-Origin": "*",
+                        "X-Accel-Buffering": "no"
+                    });
+
+                    const ls = getLanguageServerSession();
+                    if (!ls) {
+                        // Language server offline notice
+                        res.write(`data: ${JSON.stringify({
+                            type: "error",
+                            error: "Antigravity Language Server is offline. Please launch Antigravity or ensure active_session.json exists."
+                        })}\n\n`);
+                        res.end();
+                        return;
+                    }
+
+                    logActivity("info", "Cascade", `Initiating Cascade on port ${ls.port} with model ${mappedModel}`);
+
+                    let cascadeId;
+                    try {
+                        const startRes = await lsRpcRequest(ls.port, ls.csrf, "StartCascade", {
+                            source: "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT",
+                            metadata: {
+                                ideName: "antigravity",
+                                ideVersion: "2.28.2"
+                            }
+                        });
+                        cascadeId = startRes.cascadeId;
+                    } catch (startErr) {
+                        res.write(`data: ${JSON.stringify({ type: "error", error: `StartCascade failed: ${startErr.message}` })}\n\n`);
+                        res.end();
+                        return;
+                    }
+
+                    // Compose full prompt with system prompt and history
+                    let fullText = "";
+                    if (systemPrompt && systemPrompt.trim()) {
+                        fullText += `[System Directives]\n${systemPrompt.trim()}\n\n`;
+                    }
+                    for (const msg of history) {
+                        const role = (msg.role === "model" || msg.role === "assistant") ? "Antigravity" : "User";
+                        fullText += `[${role}]\n${(msg.content || "").trim()}\n\n`;
+                    }
+                    fullText += prompt;
+
+                    try {
+                        await lsRpcRequest(ls.port, ls.csrf, "SendUserCascadeMessage", {
+                            cascadeId,
+                            items: [{ text: fullText }],
+                            cascadeConfig: {
+                                plannerConfig: {
+                                    planModel: mappedModel,
+                                    useAiCredits: true
+                                }
+                            }
+                        });
+                    } catch (sendErr) {
+                        res.write(`data: ${JSON.stringify({ type: "error", error: `SendUserCascadeMessage failed: ${sendErr.message}` })}\n\n`);
+                        res.end();
+                        return;
+                    }
+
+                    // Poll trajectory steps
+                    let seenThinkingLen = 0;
+                    let seenTextLen = 0;
+                    let fullResponse = "";
+                    let isCompleted = false;
+                    let isCancelled = false;
+
+                    req.on("close", () => {
+                        isCancelled = true;
+                    });
+
+                    const pollStartTime = Date.now();
+                    const timeoutMs = 180000;
+
+                    const pollSteps = async () => {
+                        if (isCompleted || isCancelled) return;
+                        if (Date.now() - pollStartTime > timeoutMs) {
+                            res.write(`data: ${JSON.stringify({ type: "error", error: "Cascade agent request timed out after 180s" })}\n\n`);
+                            res.end();
+                            return;
+                        }
+
+                        try {
+                            const stepsRes = await lsRpcRequest(ls.port, ls.csrf, "GetCascadeTrajectorySteps", { cascadeId });
+                            const steps = Array.isArray(stepsRes.steps) ? stepsRes.steps : [];
+
+                            for (const step of steps) {
+                                if (step.type === "CORTEX_STEP_TYPE_ERROR_MESSAGE") {
+                                    const errMsg = step.errorMessage?.error?.shortError ||
+                                        step.errorMessage?.error?.userErrorMessage ||
+                                        "Antigravity Agent encountered an internal error";
+                                    res.write(`data: ${JSON.stringify({ type: "error", error: errMsg })}\n\n`);
+                                    res.end();
+                                    isCompleted = true;
+                                    return;
+                                }
+
+                                if (step.type === "CORTEX_STEP_TYPE_PLANNER_RESPONSE") {
+                                    const pr = step.plannerResponse || {};
+
+                                    // Thinking delta
+                                    const thinking = pr.thinking || pr.thinkingProcess || "";
+                                    if (thinking.length > seenThinkingLen) {
+                                        const delta = thinking.slice(seenThinkingLen);
+                                        seenThinkingLen = thinking.length;
+                                        res.write(`data: ${JSON.stringify({ type: "thinking", content: delta })}\n\n`);
+                                    }
+
+                                    // Response text delta
+                                    const resp = pr.response || pr.modifiedResponse || "";
+                                    if (resp.length > seenTextLen) {
+                                        const delta = resp.slice(seenTextLen);
+                                        seenTextLen = resp.length;
+                                        fullResponse = resp;
+                                        res.write(`data: ${JSON.stringify({ type: "text", content: delta })}\n\n`);
+                                    }
+
+                                    // Status completion
+                                    if (step.status === "CORTEX_STEP_STATUS_DONE" || step.status === "DONE") {
+                                        isCompleted = true;
+                                        res.write(`data: ${JSON.stringify({ type: "done", fullText: fullResponse, model: mappedModel })}\n\n`);
+                                        res.end();
+                                        return;
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+
+                        if (!isCompleted && !isCancelled) {
+                            setTimeout(pollSteps, 200);
+                        }
+                    };
+
+                    setTimeout(pollSteps, 150);
+
+                } catch (err) {
+                    sendJson(500, { ok: false, error: err.message });
+                }
+            });
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // GET /api/fs/tree - Workspace Directory Tree
+        // ---------------------------------------------------------------------
+        if (req.method === "GET" && pathname === "/api/fs/tree") {
+            const relParam = parsedUrl.searchParams.get("path") || ".";
+            const targetDir = path.resolve(this.workspace, relParam);
+            const rootWs = path.resolve(this.workspace);
+
+            if (!targetDir.startsWith(rootWs)) {
+                sendJson(403, { ok: false, error: "Access denied: Path traversal outside workspace forbidden" });
+                return;
+            }
+
+            const tree = scanFsTree(this.workspace, relParam === "." ? "" : relParam);
+            sendJson(200, {
+                ok: true,
+                root: path.basename(this.workspace),
+                workspace: this.workspace,
+                tree
+            });
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // GET /api/fs/read - Read File Content
+        // ---------------------------------------------------------------------
+        if (req.method === "GET" && pathname === "/api/fs/read") {
+            const relParam = parsedUrl.searchParams.get("path");
+            if (!relParam) {
+                sendJson(400, { ok: false, error: "Missing 'path' parameter" });
+                return;
+            }
+
+            const targetFile = path.resolve(this.workspace, relParam);
+            const rootWs = path.resolve(this.workspace);
+
+            if (!targetFile.startsWith(rootWs)) {
+                sendJson(403, { ok: false, error: "Access denied: Path traversal outside workspace forbidden" });
+                return;
+            }
+
+            if (!fs.existsSync(targetFile) || fs.statSync(targetFile).isDirectory()) {
+                sendJson(404, { ok: false, error: "File not found" });
+                return;
+            }
+
+            try {
+                const stat = fs.statSync(targetFile);
+                if (stat.size > 5 * 1024 * 1024) {
+                    sendJson(413, { ok: false, error: "File exceeds 5MB size limit" });
+                    return;
+                }
+                const content = fs.readFileSync(targetFile, "utf-8");
+                sendJson(200, {
+                    ok: true,
+                    path: relParam.replace(/\\/g, "/"),
+                    mime: getMimeType(targetFile),
+                    size: stat.size,
+                    mtime: stat.mtime.toISOString(),
+                    content
+                });
+            } catch (err) {
+                sendJson(500, { ok: false, error: err.message });
+            }
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // POST /api/fs/write - Write File Content Safely
+        // ---------------------------------------------------------------------
+        if (req.method === "POST" && pathname === "/api/fs/write") {
+            let body = "";
+            req.on("data", c => { body += c; });
+            req.on("end", () => {
+                try {
+                    const data = JSON.parse(body || "{}");
+                    if (!data.path) {
+                        sendJson(400, { ok: false, error: "Field 'path' is required" });
+                        return;
+                    }
+
+                    const targetFile = path.resolve(this.workspace, data.path);
+                    const rootWs = path.resolve(this.workspace);
+
+                    if (!targetFile.startsWith(rootWs)) {
+                        sendJson(403, { ok: false, error: "Access denied: Path traversal outside workspace forbidden" });
+                        return;
+                    }
+
+                    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+                    const content = typeof data.content === "string" ? data.content : "";
+                    fs.writeFileSync(targetFile, content, "utf-8");
+                    const bytesWritten = Buffer.byteLength(content, "utf-8");
+                    logActivity("info", "FS", `File written: ${data.path} (${bytesWritten} bytes)`);
+
+                    sendJson(200, {
+                        ok: true,
+                        path: data.path.replace(/\\/g, "/"),
+                        bytesWritten
+                    });
+                } catch (e) {
+                    sendJson(500, { ok: false, error: e.message });
+                }
+            });
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // GET /api/git/diff - Git Status & Working Tree Diff
+        // ---------------------------------------------------------------------
+        if (req.method === "GET" && pathname === "/api/git/diff") {
+            try {
+                const status = execFileSync("git", ["status", "-s"], {
+                    cwd: this.workspace,
+                    encoding: "utf-8",
+                    timeout: 5000,
+                    windowsHide: true
+                });
+                const diff = execFileSync("git", ["diff"], {
+                    cwd: this.workspace,
+                    encoding: "utf-8",
+                    timeout: 5000,
+                    windowsHide: true
+                });
+                sendJson(200, {
+                    ok: true,
+                    status: status.trim(),
+                    diff: diff || ""
+                });
+            } catch (err) {
+                sendJson(200, {
+                    ok: true,
+                    status: "",
+                    diff: "",
+                    note: "Not a git repository or git binary unavailable"
+                });
+            }
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // GET /api/presets - All 16 Presets & Catalog
         // ---------------------------------------------------------------------
         if (req.method === "GET" && pathname === "/api/presets") {
             const presets = getAllPresets();
@@ -1148,9 +2136,9 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // POST /api/switch-preset - Switch Preset & Apply Overlays
+        // POST /api/presets/switch & POST /api/switch-preset
         // ---------------------------------------------------------------------
-        if (req.method === "POST" && pathname === "/api/switch-preset") {
+        if (req.method === "POST" && (pathname === "/api/presets/switch" || pathname === "/api/switch-preset")) {
             let body = "";
             req.on("data", c => { body += c; });
             req.on("end", () => {
@@ -1174,18 +2162,33 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // GET /api/slots - Multi-Account Status
+        // GET /api/accounts & GET /api/slots - Multi-Account Carousel
         // ---------------------------------------------------------------------
-        if (req.method === "GET" && pathname === "/api/slots") {
+        if (req.method === "GET" && (pathname === "/api/accounts" || pathname === "/api/slots")) {
             const data = getAccountSlotsStatus();
             sendJson(200, data);
             return;
         }
 
         // ---------------------------------------------------------------------
-        // POST /api/switch-slot - Rotate or Bind Slot
+        // POST /api/accounts/rotate
         // ---------------------------------------------------------------------
-        if (req.method === "POST" && pathname === "/api/switch-slot") {
+        if (req.method === "POST" && pathname === "/api/accounts/rotate") {
+            try {
+                const resRotate = rotateAccountSlot(null);
+                const updated = getAccountSlotsStatus();
+                logActivity("info", "Accounts", `Account rotated to next slot`);
+                sendJson(200, { ok: true, result: resRotate, status: updated });
+            } catch (e) {
+                sendJson(500, { ok: false, error: e.message });
+            }
+            return;
+        }
+
+        // ---------------------------------------------------------------------
+        // POST /api/accounts/switch-slot & POST /api/switch-slot
+        // ---------------------------------------------------------------------
+        if (req.method === "POST" && (pathname === "/api/accounts/switch-slot" || pathname === "/api/switch-slot")) {
             let body = "";
             req.on("data", c => { body += c; });
             req.on("end", () => {
@@ -1194,7 +2197,7 @@ class ServerDashboard {
                     const targetSlot = data.slot ? Number(data.slot) : null;
                     const resRotate = rotateAccountSlot(targetSlot);
                     const updated = getAccountSlotsStatus();
-                    logActivity("info", "Accounts", `Account rotated to slot ${targetSlot || "next"}`);
+                    logActivity("info", "Accounts", `Account switched to slot ${targetSlot || "next"}`);
                     sendJson(200, { ok: true, result: resRotate, status: updated });
                 } catch (e) {
                     sendJson(500, { ok: false, error: e.message });
@@ -1222,7 +2225,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // GET /api/workspaces - Recent & Available Projects
+        // GET /api/workspaces
         // ---------------------------------------------------------------------
         if (req.method === "GET" && pathname === "/api/workspaces") {
             const list = getRecentWorkspaces(this.workspace);
@@ -1232,7 +2235,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // POST /api/workspaces/select - Change Active Workspace
+        // POST /api/workspaces/select
         // ---------------------------------------------------------------------
         if (req.method === "POST" && pathname === "/api/workspaces/select") {
             let body = "";
@@ -1260,7 +2263,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // POST /api/workspaces/init - Initialize Project (.agy/config.json)
+        // POST /api/workspaces/init
         // ---------------------------------------------------------------------
         if (req.method === "POST" && pathname === "/api/workspaces/init") {
             let body = "";
@@ -1273,7 +2276,7 @@ class ServerDashboard {
                     if (resInit.ok) {
                         this.workspace = targetWs;
                     }
-                    logActivity("info", "Workspace", `Project init in ${targetWs} (Slot: ${data.slot}, Preset: ${data.preset})`);
+                    logActivity("info", "Workspace", `Project init in ${targetWs}`);
                     sendJson(200, { ok: true, result: resInit, workspace: inspectWorkspace(targetWs) });
                 } catch (e) {
                     sendJson(500, { ok: false, error: e.message });
@@ -1283,109 +2286,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // POST /api/chat/stream - Server-Sent Events (SSE) Streaming Chat
-        // ---------------------------------------------------------------------
-        if (req.method === "POST" && pathname === "/api/chat/stream") {
-            let body = "";
-            req.on("data", c => { body += c; });
-            req.on("end", () => {
-                try {
-                    const data = JSON.parse(body || "{}");
-                    const prompt = data.prompt;
-                    if (!prompt || !prompt.trim()) {
-                        sendJson(400, { ok: false, error: "Prompt is required" });
-                        return;
-                    }
-
-                    const slot = data.slot || null;
-                    const preset = data.preset || getActivePreset(this.workspace);
-                    const model = data.model || "gemini-3.8-flash-high";
-                    const ws = data.workspace ? path.resolve(data.workspace) : this.workspace;
-
-                    res.writeHead(200, {
-                        "Content-Type": "text/event-stream; charset=utf-8",
-                        "Cache-Control": "no-cache, no-transform",
-                        "Connection": "keep-alive",
-                        "Access-Control-Allow-Origin": "*",
-                        "X-Accel-Buffering": "no"
-                    });
-
-                    const agyBin = getAgyCliPath();
-                    let child = null;
-
-                    if (agyBin) {
-                        const args = ["exec", prompt];
-                        if (slot) args.push("-s", String(slot));
-                        if (preset) args.push("-p", String(preset));
-                        if (model) args.push("-m", String(model));
-
-                        logActivity("info", "ChatStream", `Spawning: agy exec in ${ws}`);
-                        child = spawn(agyBin, args, {
-                            cwd: ws,
-                            windowsHide: true,
-                            env: { ...process.env, PYTHONUNBUFFERED: "1" }
-                        });
-
-                        let accumulated = "";
-
-                        child.stdout.on("data", (chunk) => {
-                            const str = chunk.toString();
-                            accumulated += str;
-                            res.write(`data: ${JSON.stringify({ type: "chunk", text: str })}\n\n`);
-                        });
-
-                        child.stderr.on("data", (chunk) => {
-                            const errStr = chunk.toString();
-                            res.write(`data: ${JSON.stringify({ type: "stderr", text: errStr })}\n\n`);
-                        });
-
-                        child.on("close", (code) => {
-                            res.write(`data: ${JSON.stringify({ type: "done", fullText: accumulated, exitCode: code })}\n\n`);
-                            res.end();
-                        });
-
-                        child.on("error", (err) => {
-                            res.write(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
-                            res.end();
-                        });
-
-                        req.on("close", () => {
-                            if (child) {
-                                try { child.kill(); } catch (_) {}
-                            }
-                        });
-                    } else {
-                        // Simulated streaming fallback when agy CLI binary is compiling or absent
-                        const fallbackMsg = `[Antigravity Headless Server]\n` +
-                            `Запрос принят к выполнению на сервере.\n` +
-                            `Пресет: ${preset} | Модель: ${model} | Слот: ${slot || "Auto"}\n` +
-                            `Воркспейс: ${ws}\n\n` +
-                            `Для полноценной генерации убедитесь, что бинарник ядра agy скомпилирован (agy 3.0.0).`;
-
-                        let idx = 0;
-                        const interval = setInterval(() => {
-                            if (idx < fallbackMsg.length) {
-                                const slice = fallbackMsg.slice(idx, idx + 8);
-                                idx += 8;
-                                res.write(`data: ${JSON.stringify({ type: "chunk", text: slice })}\n\n`);
-                            } else {
-                                clearInterval(interval);
-                                res.write(`data: ${JSON.stringify({ type: "done", fullText: fallbackMsg })}\n\n`);
-                                res.end();
-                            }
-                        }, 25);
-
-                        req.on("close", () => clearInterval(interval));
-                    }
-                } catch (err) {
-                    sendJson(500, { ok: false, error: err.message });
-                }
-            });
-            return;
-        }
-
-        // ---------------------------------------------------------------------
-        // POST /api/terminal/exec - Interactive Console Command Runner
+        // POST /api/terminal/exec - Console Command Runner
         // ---------------------------------------------------------------------
         if (req.method === "POST" && pathname === "/api/terminal/exec") {
             let body = "";
@@ -1427,7 +2328,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // GET /api/logs - Real-time Logs Viewer
+        // GET /api/logs
         // ---------------------------------------------------------------------
         if (req.method === "GET" && pathname === "/api/logs") {
             const type = parsedUrl.searchParams.get("type") || "server_dashboard";
@@ -1438,7 +2339,7 @@ class ServerDashboard {
         }
 
         // ---------------------------------------------------------------------
-        // GET /api/artifacts - Brain Artifacts (.md files)
+        // GET /api/artifacts & GET /api/artifact-content
         // ---------------------------------------------------------------------
         if (req.method === "GET" && pathname === "/api/artifacts") {
             const cid = parsedUrl.searchParams.get("cid") || null;
@@ -1447,9 +2348,6 @@ class ServerDashboard {
             return;
         }
 
-        // ---------------------------------------------------------------------
-        // GET /api/artifact-content - View Specific Artifact Markdown
-        // ---------------------------------------------------------------------
         if (req.method === "GET" && pathname === "/api/artifact-content") {
             const cid = parsedUrl.searchParams.get("cid");
             const name = parsedUrl.searchParams.get("name");
@@ -1466,1589 +2364,261 @@ class ServerDashboard {
     }
 
     // -------------------------------------------------------------------------
-    // Frontend UI (Single Page Application - Complete Responsive Dark Client)
+    // Built-in Studio Fallback (Modern AI Web Studio Responsive Dark SPA)
     // -------------------------------------------------------------------------
     renderHtml() {
         return `<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <title>Absolute Antigravity | Server Dashboard</title>
+  <title>Absolute Antigravity | Modern AI Web Studio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#08090d">
+  <meta name="theme-color" content="#090b10">
   <style>
     :root {
-      --bg-page: #08090d;
-      --bg-surface: rgba(15, 20, 32, 0.72);
-      --bg-surface-elevated: rgba(22, 29, 46, 0.82);
+      --bg-page: #090b10;
+      --bg-surface: rgba(15, 20, 32, 0.75);
+      --bg-surface-elevated: rgba(22, 29, 46, 0.85);
       --bg-card: rgba(17, 23, 36, 0.65);
-      --bg-hover: rgba(255, 255, 255, 0.06);
-      --bg-input: #0b0f17;
       --border: rgba(255, 255, 255, 0.08);
-      --border-subtle: rgba(255, 255, 255, 0.05);
-      --border-hover: rgba(255, 255, 255, 0.18);
-      --border-focus: #3b82f6;
       --text: #f8fafc;
       --text-muted: #94a3b8;
-      --text-dim: #64748b;
       --accent: #3b82f6;
-      --accent-hover: #60a5fa;
       --accent-glow: rgba(59, 130, 246, 0.35);
-      --violet: #8b5cf6;
-      --violet-hover: #a78bfa;
-      --violet-glow: rgba(139, 92, 246, 0.35);
       --green: #10b981;
-      --green-glow: rgba(16, 185, 129, 0.35);
-      --orange: #f59e0b;
-      --red: #f43f5e;
-      --radius-sm: 8px;
-      --radius-md: 12px;
-      --radius-lg: 16px;
-      --radius-full: 9999px;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
-      --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-      --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      --purple: #8b5cf6;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      --font-mono: ui-monospace, "JetBrains Mono", Consolas, monospace;
     }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      -webkit-tap-highlight-color: transparent;
-      scrollbar-width: thin;
-      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
-    }
-
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 999px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
-
+    * { box-sizing: border-box; margin: 0; padding: 0; scrollbar-width: thin; }
     body {
       font-family: var(--font-sans);
       background-color: var(--bg-page);
-      background-image:
-        radial-gradient(ellipse 90% 50% at 50% -10%, rgba(59, 130, 246, 0.12), transparent 70%),
-        radial-gradient(ellipse 70% 40% at 90% 100%, rgba(139, 92, 246, 0.08), transparent 60%);
-      background-attachment: fixed;
+      background-image: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(59, 130, 246, 0.15), transparent 70%);
       color: var(--text);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
-      overflow-x: hidden;
-      padding-bottom: 76px;
-      -webkit-font-smoothing: antialiased;
     }
-
-    /* Top Navigation Header */
     header {
-      background: rgba(11, 15, 24, 0.82);
+      background: rgba(11, 15, 24, 0.85);
       backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       position: sticky;
       top: 0;
       z-index: 100;
-      border-bottom: 1px solid var(--border);
-      padding: 10px 18px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
     }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 700;
-      font-size: 14.5px;
-      letter-spacing: -0.2px;
-    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
     .brand-logo {
-      width: 28px;
-      height: 28px;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 0 16px rgba(99, 102, 241, 0.45);
-      font-size: 15px;
+      width: 32px; height: 32px; background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px;
     }
-    .brand-badge {
-      font-size: 9.5px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-      color: #93c5fd;
-      background: rgba(59, 130, 246, 0.15);
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      padding: 1px 6px;
-      border-radius: 6px;
-      margin-left: 6px;
+    .tabs { display: flex; gap: 6px; background: rgba(255, 255, 255, 0.03); padding: 4px; border-radius: 10px; border: 1px solid var(--border); }
+    .tab-btn {
+      background: transparent; border: none; color: var(--text-muted); padding: 6px 14px;
+      border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s;
     }
-
-    /* Desktop Navigation Tabs */
-    .desktop-tabs {
-      display: none;
-      gap: 4px;
-      background: rgba(255, 255, 255, 0.03);
-      padding: 3px;
-      border-radius: 10px;
-      border: 1px solid var(--border-subtle);
-    }
-    @media (min-width: 820px) {
-      .desktop-tabs { display: flex; }
-      body { padding-bottom: 24px; }
-      .nav-bar { display: none !important; }
-    }
-    .d-tab-btn {
-      background: transparent;
-      border: none;
-      color: var(--text-muted);
-      padding: 6px 12px;
-      border-radius: 7px;
-      cursor: pointer;
-      font-size: 12.5px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.15s ease;
-    }
-    .d-tab-btn:hover { color: var(--text); background: var(--bg-hover); }
-    .d-tab-btn.active {
-      color: #ffffff;
-      background: rgba(255, 255, 255, 0.09);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-    }
-
-    /* Header Right Quick Status Pills */
-    .header-pills {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .pill {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border);
-      font-size: 11px;
-      padding: 5px 10px;
-      border-radius: 20px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      cursor: pointer;
-      color: var(--text);
-      font-weight: 500;
-      transition: all 0.15s;
-    }
-    .pill:hover { background: var(--bg-hover); border-color: var(--border-hover); }
-    .pill-interactive { cursor: pointer; }
-
-    /* Live Radar Ping Indicator */
-    .radar-box {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 14px;
-      height: 14px;
-    }
-    .radar-dot, .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 10px var(--green);
-      position: relative;
-      z-index: 2;
-      transition: background 0.3s;
-    }
-    .radar-dot.offline, .status-dot.offline {
-      background: var(--red);
-      box-shadow: 0 0 8px var(--red);
-    }
-    .radar-wave {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      border-radius: 50%;
-      background: rgba(16, 185, 129, 0.5);
-      animation: radarPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-      z-index: 1;
-    }
-    .radar-dot.offline ~ .radar-wave, .status-dot.offline ~ .radar-wave {
-      display: none;
-    }
-    @keyframes radarPing {
-      0% { transform: scale(0.8); opacity: 0.9; }
-      70%, 100% { transform: scale(2.6); opacity: 0; }
-    }
-
-    /* Mobile Bottom Navigation Bar */
-    .nav-bar {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: rgba(11, 15, 24, 0.92);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
-      border-top: 1px solid var(--border);
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      padding: 6px 4px max(6px, env(safe-area-inset-bottom));
-      z-index: 100;
-    }
-    .nav-item {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      background: transparent;
-      border: none;
-      color: var(--text-dim);
-      cursor: pointer;
-      font-size: 10px;
-      font-weight: 600;
-      padding: 5px 0;
-      transition: all 0.15s ease;
-      position: relative;
-    }
-    .nav-item .nav-icon { font-size: 18px; margin-bottom: 2px; transition: transform 0.15s; }
-    .nav-item.active { color: #ffffff; }
-    .nav-item.active .nav-icon { transform: translateY(-2px); }
-    .nav-item.active::after {
-      content: "";
-      position: absolute;
-      bottom: 1px;
-      width: 16px;
-      height: 2px;
-      background: var(--accent);
-      border-radius: 2px;
-      box-shadow: 0 0 8px var(--accent);
-    }
-
-    /* Tab Containers */
-    .tab-content {
-      display: none;
-      flex-direction: column;
-      flex: 1;
-      width: 100%;
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 16px 18px;
-      animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .tab-content.active { display: flex; }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(6px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Common Card Styles */
-    .card {
-      background: var(--bg-surface);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--border);
-      border-top: 1px solid rgba(255, 255, 255, 0.13);
-      border-radius: var(--radius-lg);
-      padding: 18px;
-      margin-bottom: 14px;
-      box-shadow: var(--shadow-card);
-      position: relative;
-    }
-    .card-title {
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: var(--text-muted);
-      font-weight: 700;
-      margin-bottom: 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .card-subtitle {
-      font-size: 12.5px;
-      color: var(--text-muted);
-      line-height: 1.5;
-      margin-bottom: 14px;
-    }
-
-    /* Buttons & Form Inputs */
+    .tab-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+    .tab-btn.active { color: #fff; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+    main { flex: 1; padding: 24px; max-width: 1400px; width: 100%; margin: 0 auto; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; animation: fadeIn 0.25s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
     .btn {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 8px 14px;
-      border-radius: var(--radius-sm);
-      font-size: 12.5px;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.15s ease;
+      background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 8px 16px;
+      font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s;
     }
-    .btn:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: var(--border-hover);
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-      border: 1px solid rgba(59, 130, 246, 0.4);
-      color: #fff;
-      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
-    }
-    .btn-primary:hover {
-      background: linear-gradient(135deg, #60a5fa, #2563eb);
-      box-shadow: 0 4px 14px rgba(59, 130, 246, 0.5);
-    }
-    .btn-success {
-      background: linear-gradient(135deg, #10b981, #059669);
-      border: 1px solid rgba(16, 185, 129, 0.4);
-      color: #fff;
-      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
-    }
-    .btn-danger {
-      background: linear-gradient(135deg, #f43f5e, #be123c);
-      border: 1px solid rgba(244, 63, 94, 0.4);
-      color: #fff;
-    }
-    .btn-gradient {
-      background: linear-gradient(135deg, #8b5cf6, #3b82f6);
-      border: 1px solid rgba(139, 92, 246, 0.4);
-      color: #fff;
-      box-shadow: 0 2px 10px rgba(139, 92, 246, 0.35);
-    }
-    .btn-gradient:hover {
-      background: linear-gradient(135deg, #a78bfa, #60a5fa);
-      box-shadow: 0 4px 16px rgba(139, 92, 246, 0.5);
-    }
-    .btn-ghost {
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--text-muted);
-    }
-    .btn-ghost:hover {
-      background: var(--bg-hover);
-      color: var(--text);
-      border-color: var(--border);
-    }
+    .btn:hover { background: #2563eb; }
+    .btn-secondary { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.14); }
     .input {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 8px 12px;
-      border-radius: var(--radius-sm);
-      font-size: 13px;
-      outline: none;
-      width: 100%;
-      transition: all 0.15s;
+      background: #0b0f17; border: 1px solid var(--border); border-radius: 8px;
+      padding: 9px 12px; color: #fff; font-family: inherit; font-size: 13.5px; outline: none;
+    }
+    .input:focus { border-color: var(--accent); }
+    pre, code { font-family: var(--font-mono); }
+    .terminal-screen {
+      background: #050608; border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+      height: 480px; overflow-y: auto; color: #38bdf8; font-size: 13px; line-height: 1.5; white-space: pre-wrap;
     }
-    .input:focus {
-      border-color: var(--border-focus);
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-    }
-
-    /* TAB 1: 💬 AGENT CHAT (Cursor & Claude Level) */
-    .chat-container {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      flex: 1;
-      min-height: 420px;
-      max-height: calc(100vh - 290px);
-      overflow-y: auto;
-      padding: 6px 4px 16px 4px;
-      margin-bottom: 8px;
-    }
-    .chat-msg {
-      max-width: 92%;
-      border-radius: var(--radius-md);
-      font-size: 13.5px;
-      line-height: 1.6;
-      word-break: break-word;
-      animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .chat-msg.user {
-      align-self: flex-end;
-      background: linear-gradient(135deg, rgba(30, 58, 138, 0.32), rgba(37, 99, 235, 0.2));
-      border: 1px solid rgba(59, 130, 246, 0.4);
-      color: #ffffff;
-      border-bottom-right-radius: 4px;
-      padding: 12px 16px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-    }
-    .chat-msg.assistant {
-      align-self: flex-start;
-      background: rgba(17, 23, 36, 0.78);
-      backdrop-filter: blur(20px);
-      border: 1px solid var(--border);
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
-      border-bottom-left-radius: 4px;
-      padding: 14px 18px;
-      box-shadow: var(--shadow-card);
-    }
-    .chat-msg-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      gap: 12px;
-    }
-    .chat-avatar {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.3px;
-      padding: 2px 8px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .chat-avatar.user {
-      background: rgba(59, 130, 246, 0.25);
-      color: #93c5fd;
-      border: 1px solid rgba(59, 130, 246, 0.4);
-    }
-    .chat-avatar.assistant {
-      background: linear-gradient(135deg, rgba(139, 92, 246, 0.25), rgba(59, 130, 246, 0.25));
-      color: #c4b5fd;
-      border: 1px solid rgba(139, 92, 246, 0.4);
-    }
-    .chat-msg-time {
-      font-size: 10px;
-      color: var(--text-dim);
-    }
-    .chat-msg-body {
-      font-size: 13.5px;
-      line-height: 1.6;
-    }
-    .typing-cursor {
-      display: inline-block;
-      margin-left: 2px;
-      color: var(--accent);
-      animation: blinkCursor 0.8s infinite;
-      font-weight: 700;
-    }
-    @keyframes blinkCursor {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
-    }
-
-    /* Premium Code Blocks with Header & Copy Button */
-    .code-block {
-      margin: 12px 0;
-      border-radius: var(--radius-sm);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      background: #04060b;
-      overflow: hidden;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-    }
-    .code-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 6px 12px;
-      background: rgba(255, 255, 255, 0.04);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      font-size: 11px;
-    }
-    .code-lang {
-      font-family: var(--font-mono);
-      text-transform: lowercase;
-      color: #94a3b8;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-    }
-    .copy-code-btn {
-      background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: #cbd5e1;
-      font-size: 11px;
-      padding: 3px 8px;
-      border-radius: 5px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      transition: all 0.15s;
-    }
-    .copy-code-btn:hover {
-      background: rgba(255, 255, 255, 0.1);
-      color: #ffffff;
-    }
-    .copy-code-btn.copied {
-      background: rgba(16, 185, 129, 0.15);
-      border-color: #10b981;
-      color: #10b981;
-    }
-    .code-block pre {
-      padding: 12px 14px;
-      margin: 0;
-      overflow-x: auto;
-      font-family: var(--font-mono);
-      font-size: 12.5px;
-      line-height: 1.6;
-      color: #e2e8f0;
-    }
-    .code-block code {
-      font-family: var(--font-mono);
-      background: transparent;
-      padding: 0;
-    }
-    code.inline-code {
-      font-family: var(--font-mono);
-      font-size: 12px;
-      background: rgba(255, 255, 255, 0.08);
-      padding: 2px 6px;
-      border-radius: 4px;
-      color: #93c5fd;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-    }
-
-    /* Prompt Suggestion Chips */
-    .chat-prompt-chips {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      padding-bottom: 8px;
-      margin-bottom: 10px;
-    }
-    .chip {
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      font-size: 11.5px;
-      padding: 5px 12px;
-      border-radius: 20px;
-      white-space: nowrap;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .chip:hover {
-      color: var(--text);
-      border-color: var(--accent);
-      background: rgba(59, 130, 246, 0.08);
-      transform: translateY(-1px);
-    }
-
-    /* Floating Chat Input Box */
-    .chat-floating-bar {
-      background: rgba(14, 19, 31, 0.85);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid var(--border);
-      border-top: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: var(--radius-md);
-      padding: 10px 12px;
-      box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.6);
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .chat-bar-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
-      font-size: 11.5px;
-    }
-    .chat-meta-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .chat-model-select {
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 11.5px;
-      outline: none;
-      cursor: pointer;
-    }
-    .chat-preset-tag {
-      font-size: 10.5px;
-      font-weight: 600;
-      color: var(--violet);
-      background: rgba(139, 92, 246, 0.12);
-      border: 1px solid rgba(139, 92, 246, 0.3);
-      padding: 2px 7px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .chat-bar {
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-    }
-    .chat-textarea {
-      flex: 1;
-      min-height: 44px;
-      max-height: 140px;
-      resize: none;
-      padding: 10px 12px;
-      border-radius: var(--radius-sm);
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-family: inherit;
-      font-size: 13px;
-      line-height: 1.5;
-      outline: none;
-      transition: all 0.15s;
-    }
-    .chat-textarea:focus {
-      border-color: var(--border-focus);
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-    }
-    .chat-action-btn {
-      height: 44px;
-      width: 48px;
-      border-radius: var(--radius-sm);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      cursor: pointer;
-      border: none;
-      transition: all 0.15s;
-    }
-
-    /* TAB 2: 🎯 PRESETS (Linear Style) */
-    .presets-filter-bar {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      align-items: center;
-      margin-top: 12px;
-    }
-    .search-input-wrapper {
-      position: relative;
-      flex: 1;
-      min-width: 260px;
-    }
-    .overlay-chips-group {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .overlay-toggle {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      font-size: 11.5px;
-      padding: 5px 10px;
-      border-radius: 20px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.15s ease;
-      user-select: none;
-    }
-    .overlay-toggle:hover {
-      border-color: var(--violet);
-      color: var(--text);
-    }
-    .overlay-toggle.active {
-      background: rgba(139, 92, 246, 0.15);
-      border-color: var(--violet);
-      color: #ffffff;
-      box-shadow: 0 0 12px rgba(139, 92, 246, 0.3);
-    }
-    .overlay-toggle .toggle-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--text-dim);
-      transition: background 0.15s;
-    }
-    .overlay-toggle.active .toggle-dot {
-      background: var(--violet);
-      box-shadow: 0 0 6px var(--violet);
-    }
-    .presets-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-      gap: 14px;
-      margin-top: 14px;
-    }
-    .preset-card {
-      background: var(--bg-surface);
-      backdrop-filter: blur(20px);
-      border: 1px solid var(--border);
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: var(--radius-md);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-      position: relative;
-      cursor: pointer;
-    }
-    .preset-card:hover {
-      border-color: rgba(139, 92, 246, 0.45);
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 16px rgba(139, 92, 246, 0.15);
-    }
-    .preset-card.active {
-      border-color: var(--violet);
-      background: rgba(139, 92, 246, 0.08);
-      box-shadow: 0 0 20px rgba(139, 92, 246, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    }
-    .preset-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 10px;
-    }
-    .preset-title-group {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .preset-icon-box {
-      width: 34px;
-      height: 34px;
-      border-radius: 9px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 18px;
-    }
-    .preset-name {
-      font-size: 14.5px;
-      font-weight: 700;
-      color: #ffffff;
-    }
-    .preset-slug {
-      font-size: 11px;
-      color: var(--text-dim);
-      font-family: var(--font-mono);
-    }
-    .preset-active-pill {
-      font-size: 9.5px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-      padding: 2px 7px;
-      border-radius: 12px;
-      background: rgba(16, 185, 129, 0.15);
-      border: 1px solid var(--green);
-      color: var(--green);
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .preset-active-pill .active-dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 6px var(--green);
-    }
-    .preset-desc {
-      font-size: 12px;
-      color: var(--text-muted);
-      line-height: 1.5;
-      margin-bottom: 14px;
-      flex: 1;
-    }
-    .preset-skills-row {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-      margin-bottom: 14px;
-    }
-    .skill-chip {
-      font-size: 10px;
-      font-family: var(--font-mono);
-      color: #cbd5e1;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.07);
-      padding: 2px 6px;
-      border-radius: 4px;
-    }
-    .skill-chip.more {
-      color: var(--violet);
-      background: rgba(139, 92, 246, 0.1);
-      border-color: rgba(139, 92, 246, 0.25);
-    }
-    .preset-card-footer {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding-top: 10px;
-      border-top: 1px solid var(--border-subtle);
-    }
-    .preset-skills-badge {
-      font-size: 11px;
-      font-weight: 600;
-      color: #c4b5fd;
-      background: rgba(139, 92, 246, 0.15);
-      border: 1px solid rgba(139, 92, 246, 0.3);
-      padding: 2px 8px;
-      border-radius: 12px;
-    }
-    .btn-preset-apply {
-      padding: 5px 12px;
-      font-size: 11.5px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-    }
-    .btn-preset-apply:hover {
-      background: linear-gradient(135deg, #8b5cf6, #6366f1);
-      border-color: transparent;
-      color: #fff;
-    }
-    .btn-preset-current {
-      padding: 5px 12px;
-      font-size: 11.5px;
-      background: rgba(16, 185, 129, 0.15);
-      border: 1px solid var(--green);
-      border-radius: 6px;
-      color: var(--green);
-    }
-
-    /* TAB 3: 👥 ACCOUNT CAROUSEL */
-    .slots-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-      gap: 14px;
-      margin-bottom: 16px;
-    }
-    .slot-card {
-      background: var(--bg-surface);
-      backdrop-filter: blur(20px);
-      border: 1px solid var(--border);
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: var(--radius-md);
-      padding: 16px;
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      transition: all 0.2s ease;
-    }
-    .slot-card:hover {
-      border-color: var(--border-hover);
-      transform: translateY(-2px);
-    }
-    .slot-card.active {
-      border-color: var(--green);
-      box-shadow: 0 0 20px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-      background: rgba(16, 185, 129, 0.04);
-    }
-    .slot-card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-    .slot-title {
-      font-size: 13.5px;
-      font-weight: 700;
-      color: #ffffff;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .slot-badge {
-      font-size: 10px;
-      padding: 2px 7px;
-      border-radius: 10px;
-      font-weight: 700;
-      letter-spacing: 0.4px;
-    }
-    .slot-badge.active {
-      background: rgba(16, 185, 129, 0.18);
-      color: var(--green);
-      border: 1px solid var(--green);
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .slot-badge.standby {
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text-dim);
-      border: 1px solid var(--border-subtle);
-    }
-    .slot-email {
-      font-size: 12.5px;
-      font-weight: 600;
-      color: #cbd5e1;
-      margin-bottom: 14px;
-      word-break: break-all;
-      line-height: 1.4;
-    }
-    .slot-quota-box {
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid var(--border-subtle);
-      border-radius: 8px;
-      padding: 8px 10px;
-      margin-bottom: 14px;
-    }
-    .slot-quota-label {
-      display: flex;
-      justify-content: space-between;
-      font-size: 10.5px;
-      color: var(--text-muted);
-      margin-bottom: 5px;
-    }
-    .slot-quota-label .quota-rate {
-      font-weight: 600;
-      color: var(--text);
-    }
-    .slot-quota-track {
-      width: 100%;
-      height: 5px;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 3px;
-      overflow: hidden;
-    }
-    .slot-quota-fill {
-      height: 100%;
-      border-radius: 3px;
-      transition: width 0.4s ease;
-    }
-    .slot-quota-fill.active {
-      background: linear-gradient(90deg, #10b981, #3b82f6);
-    }
-    .slot-quota-fill.standby {
-      background: rgba(255, 255, 255, 0.25);
-    }
-    .btn-slot-switch {
-      width: 100%;
-      font-size: 12px;
-      padding: 7px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      cursor: pointer;
-      color: var(--text);
-      font-weight: 600;
-      transition: all 0.15s;
-    }
-    .btn-slot-switch:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: var(--border-hover);
-    }
-    .btn-slot-selected {
-      width: 100%;
-      font-size: 12px;
-      padding: 7px;
-      background: rgba(16, 185, 129, 0.18);
-      border: 1px solid var(--green);
-      border-radius: 7px;
-      color: var(--green);
-      font-weight: 600;
-      cursor: default;
-    }
-    .failover-bar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-top: 1px solid var(--border);
-      padding-top: 14px;
-      gap: 12px;
-    }
-
-    /* TAB 5: 💻 WEB CONSOLE (Terminal macOS/Linux Window) */
-    .terminal-window-wrapper {
-      background: #040609;
-      border: 1px solid var(--border);
-      border-top: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: var(--radius-md);
-      overflow: hidden;
-      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
-      margin-bottom: 12px;
-    }
-    .terminal-titlebar {
-      background: rgba(255, 255, 255, 0.03);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-      padding: 8px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .terminal-dots {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-    }
-    .t-dot {
-      width: 11px;
-      height: 11px;
-      border-radius: 50%;
-      display: inline-block;
-    }
-    .t-dot.red { background: #ff5f56; box-shadow: 0 0 6px rgba(255, 95, 86, 0.4); }
-    .t-dot.yellow { background: #ffbd2e; box-shadow: 0 0 6px rgba(255, 189, 46, 0.4); }
-    .t-dot.green { background: #27c93f; box-shadow: 0 0 6px rgba(39, 201, 63, 0.4); }
-    .terminal-title {
-      font-size: 11.5px;
-      font-family: var(--font-mono);
-      color: #94a3b8;
-      letter-spacing: 0.3px;
-    }
-    .terminal-window {
-      padding: 14px;
-      font-family: var(--font-mono);
-      font-size: 12.5px;
-      min-height: 360px;
-      max-height: 480px;
-      overflow-y: auto;
-      color: #86efac;
-      white-space: pre-wrap;
-      line-height: 1.6;
-      background: transparent;
-    }
-    .terminal-chips {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .t-chip {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      padding: 4px 10px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .t-chip:hover {
-      background: rgba(255, 255, 255, 0.1);
-      color: #ffffff;
-      border-color: var(--border-hover);
-    }
-    .terminal-input-bar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .terminal-prompt {
-      font-family: var(--font-mono);
-      font-weight: 700;
-      color: var(--accent);
-      font-size: 14px;
-      padding-left: 4px;
-    }
-
-    /* Modal / PIN Lock Screen */
     .lock-screen {
-      position: fixed;
-      inset: 0;
-      background: rgba(6, 8, 14, 0.88);
-      backdrop-filter: blur(28px);
-      -webkit-backdrop-filter: blur(28px);
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
+      position: fixed; inset: 0; background: rgba(9, 11, 16, 0.94); backdrop-filter: blur(16px);
+      display: flex; align-items: center; justify-content: center; z-index: 999;
     }
     .lock-card {
-      background: rgba(15, 20, 32, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-top: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 20px;
-      padding: 32px 26px;
-      width: 100%;
-      max-width: 350px;
-      text-align: center;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(59, 130, 246, 0.15);
-      animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    .keypad {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-top: 20px;
-    }
-    .keypad-btn {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: #ffffff;
-      font-size: 20px;
-      font-weight: 600;
-      height: 52px;
-      border-radius: 12px;
-      cursor: pointer;
-      transition: all 0.12s;
-    }
-    .keypad-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: rgba(255, 255, 255, 0.2);
-    }
-    .keypad-btn:active {
-      transform: scale(0.96);
-      background: rgba(59, 130, 246, 0.25);
-    }
-    .pin-dots {
-      display: flex;
-      justify-content: center;
-      gap: 12px;
-      margin: 20px 0;
-    }
-    .pin-dot {
-      width: 13px;
-      height: 13px;
-      border-radius: 50%;
-      border: 2px solid rgba(255, 255, 255, 0.2);
-      transition: all 0.2s ease;
-    }
-    .pin-dot.filled {
-      background: var(--accent);
-      border-color: var(--accent);
-      box-shadow: 0 0 12px var(--accent);
-      transform: scale(1.15);
-    }
-    .shake { animation: shakeCard 0.32s ease-in-out; }
-    @keyframes shakeCard {
-      0%, 100% { transform: translateX(0); }
-      20%, 60% { transform: translateX(-9px); }
-      40%, 80% { transform: translateX(9px); }
+      background: var(--bg-surface-elevated); border: 1px solid var(--border); border-radius: 16px;
+      padding: 36px 32px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.6);
     }
   </style>
 </head>
 <body>
-
-  <!-- Top Navigation Header -->
-  <header>
-    <div class="brand">
-      <div class="brand-logo">🌌</div>
-      <div>
-        <span>Antigravity</span>
-        <span class="brand-badge">SERVER 3.0</span>
-      </div>
-    </div>
-
-    <!-- Desktop Navigation Tabs -->
-    <div class="desktop-tabs">
-      <button class="d-tab-btn active" onclick="switchTab('chat')">💬 Чат</button>
-      <button class="d-tab-btn" onclick="switchTab('presets')">🎯 Пресеты</button>
-      <button class="d-tab-btn" onclick="switchTab('accounts')">👥 Аккаунты</button>
-      <button class="d-tab-btn" onclick="switchTab('workspaces')">📁 Воркспейсы</button>
-      <button class="d-tab-btn" onclick="switchTab('terminal')">💻 Консоль</button>
-      <button class="d-tab-btn" onclick="switchTab('logs')">📜 Логи & Docs</button>
-    </div>
-
-    <!-- Right Status Pills -->
-    <div class="header-pills">
-      <div class="pill pill-interactive" id="slotPill" onclick="switchTab('accounts')" title="Активный слот">
-        <span>👤</span> <span id="slotPillText">Слот 1</span>
-      </div>
-      <div class="pill pill-interactive" id="presetPill" onclick="switchTab('presets')" title="Активный пресет">
-        <span id="presetPillIcon">🎭</span> <span id="presetPillText">orchestrator</span>
-      </div>
-      <div class="pill pill-interactive" onclick="logout()" title="Заблокировать сессию">
-        <div class="radar-box">
-          <div class="radar-dot" id="connDot"></div>
-          <div class="radar-wave"></div>
-        </div>
-        <span style="font-size:11px; margin-left:2px;">🔒</span>
-      </div>
-    </div>
-  </header>
-
-  <!-- TAB 1: 💬 AGENT CHAT -->
-  <main class="tab-content active" id="tab-chat">
-    <div class="chat-container" id="chatBox">
-      <div class="chat-msg assistant">
-        <div class="chat-msg-header">
-          <span class="chat-avatar assistant">✨ Antigravity</span>
-          <span class="chat-msg-time">Ready</span>
-        </div>
-        <div class="chat-msg-body">
-          👋 Привет! Я — Google Antigravity Headless Server. Управляй проектом, пресетами и кодогенерацией напрямую с сервера.
-        </div>
-      </div>
-    </div>
-
-    <div class="chat-prompt-chips">
-      <div class="chip" onclick="quickPrompt('Проведи полный аудит безопасности и архитектуры текущего проекта')">🛡️ Аудит безопасности</div>
-      <div class="chip" onclick="quickPrompt('Оптимизируй производительность и использование памяти')">⚡ Оптимизация памяти</div>
-      <div class="chip" onclick="quickPrompt('Напиши модульные и интеграционные тесты для измененных файлов')">🧪 Написать тесты</div>
-      <div class="chip" onclick="quickPrompt('Объясни модель владения и жизненных циклов в Rust')">🦀 Rust Ownership</div>
-    </div>
-
-    <div class="chat-floating-bar">
-      <div class="chat-bar-meta">
-        <div class="chat-meta-left">
-          <select class="chat-model-select" id="chatModel">
-            <option value="gemini-3.8-flash-high">⚡ Gemini 3.8 Flash High (Default)</option>
-            <option value="gemini-2.5-pro">🧠 Gemini 2.5 Pro (Deep)</option>
-            <option value="claude-sonnet-4-6">🎭 Claude Sonnet 4.6 (Thinking)</option>
-            <option value="claude-opus-4-6-thinking">👑 Claude Opus 4.6 (Thinking)</option>
-            <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash Lite</option>
-          </select>
-          <div class="chat-preset-tag">
-            <span>🎭</span> <span id="chatPresetIndicator">orchestrator</span>
-          </div>
-          <span style="color:var(--text-dim); font-size:11px;" id="chatWsInfo">📁 ...</span>
-        </div>
-        <button class="btn btn-ghost" style="padding:2px 8px; font-size:11px;" onclick="clearChat()">🗑️ Очистить</button>
-      </div>
-      <div class="chat-bar">
-        <textarea class="chat-textarea" id="chatInput" placeholder="Введите задачу для Antigravity (Enter - отправить, Shift+Enter - строка)..." onkeydown="handleChatKey(event)"></textarea>
-        <button class="btn btn-primary chat-action-btn" id="chatSendBtn" onclick="sendChatMessage()" title="Отправить сообщение">➤</button>
-        <button class="btn btn-danger chat-action-btn" id="chatStopBtn" style="display:none;" onclick="stopChatStream()" title="Остановить генерацию">⏹</button>
-      </div>
-    </div>
-  </main>
-
-  <!-- TAB 2: 🎯 PRESETS -->
-  <main class="tab-content" id="tab-presets">
-    <div class="card">
-      <div class="card-title">
-        <span>Активный пресет проекта</span>
-        <span class="pill" id="activePresetBadge" style="color:var(--violet); border-color:rgba(139, 92, 246, 0.4);">🎭 orchestrator</span>
-      </div>
-      <p class="card-subtitle">
-        Выберите пресет для загрузки специализированного набора навыков и системного контекста в текущий воркспейс.
-      </p>
-      <div class="presets-filter-bar">
-        <div class="search-input-wrapper">
-          <input type="text" class="input" id="presetSearch" placeholder="🔍 Поиск пресетов и навыков..." oninput="filterPresets()">
-        </div>
-        <div class="overlay-chips-group" id="overlayChips">
-          <span class="overlay-toggle" onclick="toggleOverlay(this, '+qa')"><span class="toggle-dot"></span>+qa</span>
-          <span class="overlay-toggle" onclick="toggleOverlay(this, '+devops')"><span class="toggle-dot"></span>+devops</span>
-          <span class="overlay-toggle" onclick="toggleOverlay(this, '+docker')"><span class="toggle-dot"></span>+docker</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="presets-grid" id="presetsList">
-      <!-- Generated via JS -->
-    </div>
-  </main>
-
-  <!-- TAB 3: 👥 ACCOUNTS -->
-  <main class="tab-content" id="tab-accounts">
-    <div class="card">
-      <div class="card-title">
-        <span>Карусель Google аккаунтов (Multi-Account Carousel)</span>
-        <button class="btn btn-gradient" onclick="rotateSlot()">🔄 Ротация слота</button>
-      </div>
-      <p class="card-subtitle">
-        Автономный пул учетных записей Antigravity с защитой от 429 ResourceExhausted и ротацией токенов.
-      </p>
-      <div class="slots-grid" id="slotsContainer">
-        <!-- Generated via JS -->
-      </div>
-      <div class="failover-bar">
-        <div>
-          <div style="font-size:13px; font-weight:600;">Автоматический переход при 429 (Auto-Failover):</div>
-          <div style="font-size:11px; color:var(--text-muted);">Переключение на резервный слот при исчерпании лимитов</div>
-        </div>
-        <button class="btn btn-success" id="btnToggleFailover" onclick="toggleFailover()">Включен (ON)</button>
-      </div>
-    </div>
-  </main>
-
-  <!-- TAB 4: 📁 WORKSPACES -->
-  <main class="tab-content" id="tab-workspaces">
-    <div class="card">
-      <div class="card-title">Текущий воркспейс на сервере</div>
-      <div style="display:flex; gap:10px; margin-bottom:12px;">
-        <input type="text" class="input" id="currentWsInput" style="font-family:var(--font-mono); font-size:12px;">
-        <button class="btn btn-primary" onclick="selectWorkspace()">Сменить</button>
-      </div>
-      <div id="wsInspectionInfo" style="font-size:12px; color:var(--text-muted);">Проверка...</div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Инициализация проекта (.agy/config.json)</div>
-      <p class="card-subtitle">
-        Привяжите слот аккаунта и профиль пресета к директории (команда agy project init).
-      </p>
-      <div style="grid-template-columns:1fr 1fr; display:grid; gap:10px; margin-bottom:14px;">
-        <div>
-          <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">Привязать слот:</label>
-          <select class="input" id="initSlotSelect">
-            <option value="1">Слот 1</option>
-            <option value="2">Слот 2</option>
-            <option value="3">Слот 3</option>
-            <option value="4">Слот 4</option>
-          </select>
-        </div>
-        <div>
-          <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">Базовый пресет:</label>
-          <select class="input" id="initPresetSelect"></select>
-        </div>
-      </div>
-      <button class="btn btn-success" onclick="initProject()">🚀 Инициализировать проект (agy project init)</button>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Недавние проекты на сервере</div>
-      <div id="recentWorkspacesList" style="display:flex; flex-direction:column; gap:8px;">
-        <!-- Recent paths -->
-      </div>
-    </div>
-  </main>
-
-  <!-- TAB 5: 💻 WEB CONSOLE -->
-  <main class="tab-content" id="tab-terminal">
-    <div class="card" style="padding:10px 14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
-      <div class="terminal-chips">
-        <button class="t-chip" onclick="execCommand('agy preset current')">agy preset current</button>
-        <button class="t-chip" onclick="execCommand('agy account status')">agy account status</button>
-        <button class="t-chip" onclick="execCommand('agy daemon status')">agy daemon status</button>
-        <button class="t-chip" onclick="execCommand('git status -s')">git status</button>
-      </div>
-      <button class="btn btn-ghost" style="padding:4px 8px; font-size:11px;" onclick="clearTerminal()">Очистить</button>
-    </div>
-
-    <div class="terminal-window-wrapper">
-      <div class="terminal-titlebar">
-        <div class="terminal-dots">
-          <span class="t-dot red" title="Закрыть"></span>
-          <span class="t-dot yellow" title="Свернуть"></span>
-          <span class="t-dot green" title="Развернуть"></span>
-        </div>
-        <div class="terminal-title">antigravity@server: ~ (bash / ps)</div>
-        <div style="font-size:10px; font-family:var(--font-mono); color:var(--text-dim);">v3.0.0</div>
-      </div>
-      <div class="terminal-window" id="terminalBox">Antigravity Web Console [v3.0.0]
-Готов к выполнению CLI команд в контексте сервера.
-</div>
-    </div>
-
-    <div class="terminal-input-bar">
-      <div class="terminal-prompt">$</div>
-      <input type="text" class="input" id="terminalInput" placeholder="Введите команду (например: agy preset switch web)..." onkeydown="handleTerminalKey(event)" style="font-family:var(--font-mono); font-size:12.5px;">
-      <button class="btn btn-primary" onclick="runTerminalInput()">Выполнить</button>
-    </div>
-  </main>
-
-  <!-- TAB 6: 📜 LOGS & DOCS -->
-  <main class="tab-content" id="tab-logs">
-    <div style="display:flex; gap:10px; margin-bottom:12px;">
-      <button class="btn btn-primary" id="btnSubLogs" onclick="switchLogsSubTab('logs')">📋 Системные логи</button>
-      <button class="btn btn-ghost" id="btnSubDocs" onclick="switchLogsSubTab('docs')">📖 Артефакты Brain (.md)</button>
-    </div>
-
-    <!-- Logs Subview -->
-    <div id="subViewLogs">
-      <div class="card" style="padding:10px 14px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="display:flex; gap:10px; align-items:center;">
-          <select class="input" id="logTypeSelect" onchange="fetchLogs()" style="width:auto; padding:4px 8px; font-size:12px;">
-            <option value="server_dashboard">server_dashboard</option>
-            <option value="daemon">agy-daemon</option>
-            <option value="language_server">language_server</option>
-          </select>
-          <label style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
-            <input type="checkbox" id="logAutoRefresh" onchange="toggleLogAutoRefresh()"> Авто-обновление (3s)
-          </label>
-        </div>
-        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="fetchLogs()">Обновить</button>
-      </div>
-      <div class="terminal-window-wrapper">
-        <div class="terminal-window" id="logsBox" style="color:#94a3b8; min-height:420px;">Загрузка логов...</div>
-      </div>
-    </div>
-
-    <!-- Docs Subview -->
-    <div id="subViewDocs" style="display:none;">
-      <div class="card">
-        <div class="card-title">Артефакты сессий Antigravity (.gemini/antigravity/brain)</div>
-        <div id="artifactsList" style="display:flex; flex-direction:column; gap:6px; max-height:240px; overflow-y:auto; margin-bottom:14px;">
-          Загрузка списка артефактов...
-        </div>
-        <div class="card-title" id="artifactTitle">Просмотр артефакта</div>
-        <div id="artifactViewer" style="background:#090d16; border:1px solid var(--border); border-radius:8px; padding:16px; max-height:400px; overflow-y:auto; font-size:13px; line-height:1.6;">
-          Выберите артефакт из списка выше.
-        </div>
-      </div>
-    </div>
-  </main>
-
-  <!-- Mobile Bottom Navigation -->
-  <nav class="nav-bar">
-    <button class="nav-item active" onclick="switchTab('chat')">
-      <span class="nav-icon">💬</span><span>Чат</span>
-    </button>
-    <button class="nav-item" onclick="switchTab('presets')">
-      <span class="nav-icon">🎯</span><span>Пресеты</span>
-    </button>
-    <button class="nav-item" onclick="switchTab('accounts')">
-      <span class="nav-icon">👥</span><span>Слоты</span>
-    </button>
-    <button class="nav-item" onclick="switchTab('workspaces')">
-      <span class="nav-icon">📁</span><span>Проекты</span>
-    </button>
-    <button class="nav-item" onclick="switchTab('terminal')">
-      <span class="nav-icon">💻</span><span>Консоль</span>
-    </button>
-    <button class="nav-item" onclick="switchTab('logs')">
-      <span class="nav-icon">📜</span><span>Логи</span>
-    </button>
-  </nav>
-
-  <!-- PIN Lock Screen Modal -->
-  <div class="lock-screen" id="lockScreen" style="display:none;">
-    <div class="lock-card" id="lockCard">
-      <div style="font-size:36px; margin-bottom:8px;">🌌</div>
-      <h2 style="font-size:18px; margin-bottom:4px; font-weight:700;">Antigravity Server</h2>
-      <p style="font-size:12px; color:var(--text-muted);">Введите 6-значный PIN-код для разблокировки</p>
-
-      <div class="pin-dots">
-        <div class="pin-dot" id="dot-0"></div>
-        <div class="pin-dot" id="dot-1"></div>
-        <div class="pin-dot" id="dot-2"></div>
-        <div class="pin-dot" id="dot-3"></div>
-        <div class="pin-dot" id="dot-4"></div>
-        <div class="pin-dot" id="dot-5"></div>
-      </div>
-
-      <div id="authErrorMsg" style="font-size:12px; color:var(--red); min-height:16px; margin-bottom:8px; font-weight:600;"></div>
-
-      <div class="keypad">
-        <button class="keypad-btn" onclick="pressKey('1')">1</button>
-        <button class="keypad-btn" onclick="pressKey('2')">2</button>
-        <button class="keypad-btn" onclick="pressKey('3')">3</button>
-        <button class="keypad-btn" onclick="pressKey('4')">4</button>
-        <button class="keypad-btn" onclick="pressKey('5')">5</button>
-        <button class="keypad-btn" onclick="pressKey('6')">6</button>
-        <button class="keypad-btn" onclick="pressKey('7')">7</button>
-        <button class="keypad-btn" onclick="pressKey('8')">8</button>
-        <button class="keypad-btn" onclick="pressKey('9')">9</button>
-        <button class="keypad-btn" style="font-size:14px;" onclick="clearPin()">C</button>
-        <button class="keypad-btn" onclick="pressKey('0')">0</button>
-        <button class="keypad-btn" style="font-size:16px;" onclick="backspacePin()">⌫</button>
-      </div>
+  <div id="lockScreen" class="lock-screen" style="display: none;">
+    <div class="lock-card">
+      <div style="font-size: 36px; margin-bottom: 12px;">🔐</div>
+      <h2 style="margin-bottom: 8px; font-size: 20px;">Antigravity Web Studio</h2>
+      <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">Введите 6-значный PIN-код доступа к серверу</p>
+      <input type="password" id="pinInput" class="input" maxlength="6" placeholder="• • • • • •" style="text-align: center; letter-spacing: 6px; font-size: 20px; width: 100%; margin-bottom: 16px;">
+      <button id="pinSubmitBtn" class="btn" style="width: 100%; padding: 10px;">Разблокировать Studio</button>
+      <div id="pinError" style="color: #f43f5e; font-size: 12.5px; margin-top: 12px; display: none;"></div>
     </div>
   </div>
 
+  <header>
+    <div class="brand">
+      <div class="brand-logo">⚡</div>
+      <span>Absolute Antigravity</span>
+      <span style="font-size: 10px; background: rgba(59,130,246,0.15); color: #93c5fd; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(59,130,246,0.3);">v4.0 STUDIO</span>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('chat')">Cascade Chat</button>
+      <button class="tab-btn" onclick="switchTab('presets')">Presets</button>
+      <button class="tab-btn" onclick="switchTab('accounts')">Accounts</button>
+      <button class="tab-btn" onclick="switchTab('files')">Files & Editor</button>
+      <button class="tab-btn" onclick="switchTab('terminal')">Terminal</button>
+      <button class="tab-btn" onclick="switchTab('logs')">Logs & Brain</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. Cascade Chat -->
+    <div id="tab-chat" class="tab-pane active">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3>🚀 Native Antigravity Cascade Agent</h3>
+          <div style="display: flex; gap: 10px;">
+            <select id="chatModelSelect" class="input" style="padding: 4px 10px;">
+              <option value="gemini-3.8-flash-high">Gemini 3.8 Flash High (Fast)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep)</option>
+              <option value="claude-sonnet-4-6">Claude 3.7 Sonnet</option>
+              <option value="claude-opus-4-6-thinking">Claude 3.7 Opus</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            </select>
+            <span id="lsBadge" style="font-size: 12px; padding: 4px 8px; border-radius: 6px; background: rgba(16,185,129,0.15); color: #34d399;">LS Checking...</span>
+          </div>
+        </div>
+        <div id="thinkingBox" style="display: none; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 12.5px; color: #c4b5fd; white-space: pre-wrap;"></div>
+        <div id="chatOutput" style="background: #06080c; border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 280px; max-height: 520px; overflow-y: auto; margin-bottom: 16px; line-height: 1.6; white-space: pre-wrap;">[Antigravity Studio] Ready. Ask anything to cascade agent...</div>
+        <div style="display: flex; gap: 10px;">
+          <input type="text" id="chatInput" class="input" placeholder="Введите задачу для Cascade Agent..." style="flex: 1;" onkeydown="if(event.key==='Enter') sendChat()">
+          <button class="btn" onclick="sendChat()">Отправить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Presets Tab -->
+    <div id="tab-presets" class="tab-pane">
+      <div class="card">
+        <h3>🎯 16 Presets & Specialized Meta-Skills</h3>
+        <p style="color: var(--text-muted); font-size: 13px; margin: 6px 0 16px 0;">Переключайте контекст и промпты на лету для любой роли</p>
+        <div id="presetsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px;"></div>
+      </div>
+    </div>
+
+    <!-- 3. Accounts Tab -->
+    <div id="tab-accounts" class="tab-pane">
+      <div class="card">
+        <h3>👥 4-Slot Multi-Account Carousel</h3>
+        <p style="color: var(--text-muted); font-size: 13px; margin: 6px 0 16px 0;">Управление Google-аккаунтами и квотами с автоматическим фейловером</p>
+        <div id="accountsSlots" style="display: flex; gap: 14px; margin-bottom: 20px;"></div>
+        <button class="btn" onclick="rotateAccount()">Повернуть карусель (Rotate)</button>
+      </div>
+    </div>
+
+    <!-- 4. Files & Editor Tab -->
+    <div id="tab-files" class="tab-pane">
+      <div class="card" style="display: grid; grid-template-columns: 280px 1fr; gap: 18px; min-height: 550px;">
+        <div style="border-right: 1px solid var(--border); padding-right: 14px; overflow-y: auto;">
+          <div style="font-weight: 600; font-size: 13.5px; margin-bottom: 10px;">Workspace Tree</div>
+          <div id="fileTree" style="font-size: 12.5px; font-family: var(--font-mono);">Loading tree...</div>
+        </div>
+        <div style="display: flex; flex-direction: column;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span id="activeFilePath" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-muted);">No file selected</span>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" onclick="loadGitDiff()">Git Diff</button>
+              <button class="btn" onclick="saveActiveFile()">Save File</button>
+            </div>
+          </div>
+          <textarea id="fileEditor" class="input" style="flex: 1; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; resize: none;"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. Terminal Tab -->
+    <div id="tab-terminal" class="tab-pane">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3>💻 Interactive WebSocket Terminal</h3>
+          <span id="termStatus" style="font-size: 12px; color: var(--green);">WS Connected</span>
+        </div>
+        <div id="terminalScreen" class="terminal-screen"></div>
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <input type="text" id="termInput" class="input" style="flex: 1; font-family: var(--font-mono);" placeholder="Type shell command..." onkeydown="if(event.key==='Enter') sendTermCommand()">
+          <button class="btn" onclick="sendTermCommand()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. Logs & Artifacts -->
+    <div id="tab-logs" class="tab-pane">
+      <div class="card">
+        <h3>📜 Server Activity Logs & Brain Artifacts</h3>
+        <div style="display: flex; gap: 10px; margin: 12px 0;">
+          <button class="btn btn-secondary" onclick="loadLogs('server_dashboard')">Server Dashboard</button>
+          <button class="btn btn-secondary" onclick="loadLogs('daemon')">Daemon</button>
+          <button class="btn btn-secondary" onclick="loadLogs('language_server')">Language Server</button>
+        </div>
+        <div id="logsOutput" class="terminal-screen" style="height: 380px;"></div>
+      </div>
+    </div>
+  </main>
+
   <script>
-    // -------------------------------------------------------------------------
-    // Client Application Logic
-    // -------------------------------------------------------------------------
-    let currentPin = sessionStorage.getItem("agy_pin") || localStorage.getItem("agy_pin") || "";
-    let enteredPin = "";
-    let appState = null;
-    let presetsCache = [];
-    let selectedOverlays = new Set();
-    let chatAbortController = null;
-    let logAutoInterval = null;
-    let cmdHistory = [];
-    let cmdHistoryIdx = -1;
+    let activeToken = localStorage.getItem("agy_token") || "";
+    let activePin = localStorage.getItem("agy_pin") || "";
+    let wsTerm = null;
+    let currentOpenPath = "";
 
-    // API Request Wrapper with Header Injection
-    async function apiRequest(endpoint, options = {}) {
-      options.headers = options.headers || {};
-      if (currentPin) {
-        options.headers["x-agy-pin"] = currentPin;
-        options.headers["Authorization"] = "Bearer " + currentPin;
-      }
-      try {
-        const res = await fetch(endpoint, options);
-        if (res.status === 401) {
-          showLockScreen("Требуется авторизация");
-          throw new Error("Unauthorized");
-        }
-        if (res.status === 429) {
-          const data = await res.json().catch(() => ({}));
-          showLockScreen(data.error || "IP заблокирован из-за неудачных попыток");
-          throw new Error("RateLimited");
-        }
-        return await res.json();
-      } catch (err) {
-        const dot = document.getElementById("connDot");
-        if (dot) dot.classList.add("offline");
-        throw err;
-      }
+    function getAuthHeaders() {
+      const headers = { "Content-Type": "application/json" };
+      if (activeToken) headers["Authorization"] = "Bearer " + activeToken;
+      if (activePin) headers["x-agy-pin"] = activePin;
+      return headers;
     }
 
-    // Tab Navigation
-    function switchTab(tabId) {
-      document.querySelectorAll(".tab-content").forEach(el => el.classList.remove("active"));
-      document.querySelectorAll(".nav-item").forEach(el => el.classList.remove("active"));
-      document.querySelectorAll(".d-tab-btn").forEach(el => el.classList.remove("active"));
-
-      const target = document.getElementById("tab-" + tabId);
+    function switchTab(name) {
+      document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      const target = document.getElementById("tab-" + name);
       if (target) target.classList.add("active");
-
-      const navBtns = document.querySelectorAll(".nav-item");
-      const dBtns = document.querySelectorAll(".d-tab-btn");
-      const mapping = ["chat", "presets", "accounts", "workspaces", "terminal", "logs"];
-      const idx = mapping.indexOf(tabId);
-      if (idx !== -1) {
-        if (navBtns[idx]) navBtns[idx].classList.add("active");
-        if (dBtns[idx]) dBtns[idx].classList.add("active");
-      }
-
-      if (tabId === "logs") fetchLogs();
-      if (tabId === "workspaces") fetchWorkspaces();
+      const btn = Array.from(document.querySelectorAll(".tab-btn")).find(b => b.textContent.toLowerCase().includes(name));
+      if (btn) btn.classList.add("active");
+      if (name === "terminal") initTerminal();
+      if (name === "files") loadTree();
     }
 
-    // PIN Pad Interaction
-    function showLockScreen(errMsg = "") {
-      document.getElementById("lockScreen").style.display = "flex";
-      document.getElementById("authErrorMsg").innerText = errMsg;
-      enteredPin = "";
-      updatePinDots();
-    }
-
-    function hideLockScreen() {
-      document.getElementById("lockScreen").style.display = "none";
-      const dot = document.getElementById("connDot");
-      if (dot) dot.classList.remove("offline");
-    }
-
-    function updatePinDots() {
-      for (let i = 0; i < 6; i++) {
-        const dot = document.getElementById("dot-" + i);
-        if (dot) dot.classList.toggle("filled", i < enteredPin.length);
-      }
-    }
-
-    function pressKey(num) {
-      if (enteredPin.length < 6) {
-        enteredPin += num;
-        updatePinDots();
-        if (enteredPin.length === 6) {
-          submitPin(enteredPin);
+    async function checkAuth() {
+      try {
+        const res = await fetch("/api/state", { headers: getAuthHeaders() });
+        if (res.status === 401 || res.status === 429) {
+          document.getElementById("lockScreen").style.display = "flex";
+        } else {
+          document.getElementById("lockScreen").style.display = "none";
+          initDashboard();
         }
+      } catch (_) {
+        document.getElementById("lockScreen").style.display = "flex";
       }
     }
 
-    function backspacePin() {
-      if (enteredPin.length > 0) {
-        enteredPin = enteredPin.slice(0, -1);
-        updatePinDots();
-      }
-    }
-
-    function clearPin() {
-      enteredPin = "";
-      updatePinDots();
-    }
-
-    async function submitPin(pin) {
+    document.getElementById("pinSubmitBtn").onclick = async () => {
+      const pin = document.getElementById("pinInput").value.trim();
+      const errBox = document.getElementById("pinError");
       try {
         const res = await fetch("/api/auth", {
           method: "POST",
@@ -3057,358 +2627,56 @@ class ServerDashboard {
         });
         const data = await res.json();
         if (data.ok) {
-          currentPin = pin;
-          sessionStorage.setItem("agy_pin", pin);
-          localStorage.setItem("agy_pin", pin);
-          hideLockScreen();
-          initApp();
+          activeToken = data.token;
+          activePin = pin;
+          localStorage.setItem("agy_token", activeToken);
+          localStorage.setItem("agy_pin", activePin);
+          document.getElementById("lockScreen").style.display = "none";
+          initDashboard();
         } else {
-          document.getElementById("lockCard").classList.add("shake");
-          setTimeout(() => document.getElementById("lockCard").classList.remove("shake"), 320);
-          document.getElementById("authErrorMsg").innerText = data.error || "Неверный PIN";
-          enteredPin = "";
-          updatePinDots();
+          errBox.textContent = data.error || "Неверный PIN-код";
+          errBox.style.display = "block";
         }
       } catch (e) {
-        document.getElementById("authErrorMsg").innerText = "Ошибка соединения с сервером";
+        errBox.textContent = e.message;
+        errBox.style.display = "block";
       }
-    }
+    };
 
-    function logout() {
-      sessionStorage.removeItem("agy_pin");
-      localStorage.removeItem("agy_pin");
-      currentPin = "";
-      showLockScreen("Сессия завершена");
-    }
-
-    // Physical Keyboard Listener for PIN
-    window.addEventListener("keydown", (e) => {
-      const lock = document.getElementById("lockScreen");
-      if (!lock || lock.style.display === "none") return;
-      if (e.key >= "0" && e.key <= "9") {
-        pressKey(e.key);
-      } else if (e.key === "Backspace") {
-        backspacePin();
-      } else if (e.key === "Escape" || e.key === "c" || e.key === "C") {
-        clearPin();
-      }
-    });
-
-    // Global State Sync
-    async function syncState() {
-      try {
-        const data = await apiRequest("/api/state");
-        if (data.ok) {
-          appState = data;
-          const dot = document.getElementById("connDot");
-          if (dot) dot.classList.remove("offline");
-          document.getElementById("slotPillText").innerText = "Слот " + data.activeSlot;
-          document.getElementById("presetPillText").innerText = data.activePreset;
-          document.getElementById("presetPillIcon").innerText = data.activePresetDetails?.icon || "⚡";
-          document.getElementById("activePresetBadge").innerText = (data.activePresetDetails?.icon || "⚡") + " " + data.activePreset;
-          
-          const chatInd = document.getElementById("chatPresetIndicator");
-          if (chatInd) chatInd.innerText = data.activePreset;
-
-          if (data.workspace?.name) {
-            document.getElementById("chatWsInfo").innerText = "📁 " + data.workspace.name;
-            document.getElementById("currentWsInput").value = data.workspace.path || "";
-            document.getElementById("wsInspectionInfo").innerHTML =
-              "Статус: " + (data.workspace.hasConfig ? "<span style='color:var(--green); font-weight:600;'>Привязан (.agy/config.json)</span>" : "<span style='color:var(--orange); font-weight:600;'>Не инициализирован</span>") +
-              " | Активных навыков: " + (data.workspace.skillsCount || 0);
-          }
-          renderSlots(data);
+    async function initDashboard() {
+      fetch("/api/cascade/status", { headers: getAuthHeaders() }).then(r => r.json()).then(d => {
+        const b = document.getElementById("lsBadge");
+        if (d.active) {
+          b.textContent = "LS Online (:" + d.port + ")";
+          b.style.color = "#34d399";
+        } else {
+          b.textContent = "LS Offline";
+          b.style.color = "#f43f5e";
         }
-      } catch (_) {}
+      });
+      loadPresets();
+      loadAccounts();
     }
 
-    // Render Slots Tab
-    function renderSlots(state) {
-      const cont = document.getElementById("slotsContainer");
-      if (!cont) return;
-      const accounts = state.slots || [];
-      cont.innerHTML = accounts.map(acc => {
-        const isActive = acc.slot === state.activeSlot;
-        const email = acc.email || ('developer-slot-' + acc.slot + '@server.local');
-        return \`
-          <div class="slot-card \${isActive ? 'active' : ''}">
-            <div class="slot-card-header">
-              <div class="slot-title">
-                <span>👤</span>
-                <span>Слот \${acc.slot}</span>
-              </div>
-              <span class="slot-badge \${isActive ? 'active' : 'standby'}">
-                \${isActive ? '<span class="active-dot" style="width:6px; height:6px; border-radius:50%; background:var(--green); display:inline-block; box-shadow:0 0 6px var(--green);"></span> ACTIVE' : 'STANDBY'}
-              </span>
-            </div>
-            <div class="slot-email" title="\${email}">\${email}</div>
-            <div class="slot-quota-box">
-              <div class="slot-quota-label">
-                <span>Квота API</span>
-                <span class="quota-rate">\${isActive ? '100% Ready' : 'Резерв'}</span>
-              </div>
-              <div class="slot-quota-track">
-                <div class="slot-quota-fill \${isActive ? 'active' : 'standby'}" style="width: \${isActive ? '100%' : '80%'}"></div>
-              </div>
-            </div>
-            <button class="btn \${isActive ? 'btn-slot-selected' : 'btn-slot-switch'}" onclick="rotateSlot(\${acc.slot})">
-              \${isActive ? '✔ Текущий слот' : 'Переключить на слот'}
-            </button>
-          </div>
-        \`;
-      }).join("");
+    async function sendChat() {
+      const input = document.getElementById("chatInput");
+      const prompt = input.value.trim();
+      if (!prompt) return;
+      input.value = "";
+      const model = document.getElementById("chatModelSelect").value;
+      const out = document.getElementById("chatOutput");
+      const think = document.getElementById("thinkingBox");
+      think.style.display = "none";
+      think.textContent = "";
+      out.textContent = "Cascading prompt: " + prompt + "\\n\\n";
 
-      const btnFail = document.getElementById("btnToggleFailover");
-      if (btnFail) {
-        btnFail.innerText = state.autoFailover ? "Включен (ON)" : "Выключен (OFF)";
-        btnFail.className = state.autoFailover ? "btn btn-success" : "btn";
-      }
-    }
-
-    async function rotateSlot(targetSlot = null) {
       try {
-        await apiRequest("/api/switch-slot", {
+        const resp = await fetch("/api/chat/stream", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slot: targetSlot })
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ prompt, model })
         });
-        syncState();
-      } catch (_) {}
-    }
-
-    async function toggleFailover() {
-      try {
-        await apiRequest("/api/toggle-autofailover", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: !appState?.autoFailover })
-        });
-        syncState();
-      } catch (_) {}
-    }
-
-    // Presets Tab & Filtering
-    async function loadPresets() {
-      try {
-        const data = await apiRequest("/api/presets");
-        if (data.ok) {
-          presetsCache = data.presets || [];
-          renderPresets(presetsCache);
-          const sel = document.getElementById("initPresetSelect");
-          if (sel) {
-            sel.innerHTML = presetsCache.map(p => \`<option value="\${p.id}">\${p.icon} \${p.name}</option>\`).join("");
-          }
-        }
-      } catch (_) {}
-    }
-
-    function renderPresets(list) {
-      const cont = document.getElementById("presetsList");
-      if (!cont) return;
-      cont.innerHTML = list.map(p => {
-        const skillsList = p.skills || [];
-        const skillsChips = skillsList.slice(0, 3).map(s => \`<span class="skill-chip">\${s}</span>\`).join("");
-        const moreBadge = skillsList.length > 3 ? \`<span class="skill-chip more">+\${skillsList.length - 3}</span>\` : "";
-        return \`
-          <div class="preset-card \${p.isActive ? 'active' : ''}">
-            <div class="preset-header">
-              <div class="preset-title-group">
-                <div class="preset-icon-box">\${p.icon || '⚡'}</div>
-                <div>
-                  <div class="preset-name">\${p.name}</div>
-                  <div class="preset-slug">\${p.id}</div>
-                </div>
-              </div>
-              \${p.isActive ? '<span class="preset-active-pill"><span class="active-dot"></span>ACTIVE</span>' : ''}
-            </div>
-            <div class="preset-desc">\${p.description}</div>
-            <div class="preset-skills-row">
-              \${skillsChips}
-              \${moreBadge}
-            </div>
-            <div class="preset-card-footer">
-              <span class="preset-skills-badge">\${p.skillsCount} skills</span>
-              <button class="btn \${p.isActive ? 'btn-preset-current' : 'btn-preset-apply'}" onclick="applyPresetClick('\${p.id}')">
-                \${p.isActive ? '✔ Активен' : 'Применить →'}
-              </button>
-            </div>
-          </div>
-        \`;
-      }).join("");
-    }
-
-    function filterPresets() {
-      const q = (document.getElementById("presetSearch").value || "").toLowerCase();
-      const filtered = presetsCache.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q) ||
-        p.id.toLowerCase().includes(q) ||
-        (p.skills || []).some(s => s.toLowerCase().includes(q))
-      );
-      renderPresets(filtered);
-    }
-
-    function toggleOverlay(el, overlay) {
-      if (selectedOverlays.has(overlay)) {
-        selectedOverlays.delete(overlay);
-        el.classList.remove("active");
-      } else {
-        selectedOverlays.add(overlay);
-        el.classList.add("active");
-      }
-    }
-
-    async function applyPresetClick(presetId) {
-      try {
-        const overlays = Array.from(selectedOverlays);
-        const res = await apiRequest("/api/switch-preset", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ preset: presetId, overlays })
-        });
-        if (res.ok) {
-          syncState();
-          loadPresets();
-        }
-      } catch (_) {}
-    }
-
-    // Workspaces Tab
-    async function fetchWorkspaces() {
-      try {
-        const data = await apiRequest("/api/workspaces");
-        if (data.ok) {
-          const cont = document.getElementById("recentWorkspacesList");
-          if (cont) {
-            cont.innerHTML = (data.workspaces || []).map(w => \`
-              <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); padding:10px 14px; border-radius:10px; display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                  <div style="font-size:13px; font-weight:600;">\${w.name}</div>
-                  <div style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono); margin-top:2px;">\${w.path}</div>
-                </div>
-                <button class="btn" style="font-size:11.5px; padding:4px 10px;" onclick="selectWorkspacePath('\${w.path.replace(/\\\\/g, '\\\\\\\\')}')">Открыть</button>
-              </div>
-            \`).join("");
-          }
-        }
-      } catch (_) {}
-    }
-
-    async function selectWorkspace() {
-      const pathVal = document.getElementById("currentWsInput").value;
-      if (pathVal) selectWorkspacePath(pathVal);
-    }
-
-    async function selectWorkspacePath(pathVal) {
-      try {
-        await apiRequest("/api/workspaces/select", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workspace: pathVal })
-        });
-        syncState();
-        fetchWorkspaces();
-      } catch (_) {}
-    }
-
-    async function initProject() {
-      const slot = document.getElementById("initSlotSelect").value;
-      const preset = document.getElementById("initPresetSelect").value;
-      const ws = document.getElementById("currentWsInput").value;
-      try {
-        await apiRequest("/api/workspaces/init", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workspace: ws, slot, preset })
-        });
-        syncState();
-      } catch (_) {}
-    }
-
-    // Interactive Chat & SSE Streaming
-    function appendChatMessage(role, text) {
-      const box = document.getElementById("chatBox");
-      const div = document.createElement("div");
-      div.className = "chat-msg " + role;
-      const isUser = role === "user";
-      const avatarTag = isUser
-        ? '<span class="chat-avatar user">👤 You</span>'
-        : '<span class="chat-avatar assistant">✨ Gemini</span>';
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-      div.innerHTML =
-        '<div class="chat-msg-header">' +
-          avatarTag +
-          '<span class="chat-msg-time">' + timeStr + '</span>' +
-        '</div>' +
-        '<div class="chat-msg-body">' + formatMarkdown(text) + '</div>';
-      box.appendChild(div);
-      box.scrollTop = box.scrollHeight;
-      return div.querySelector(".chat-msg-body");
-    }
-
-    function quickPrompt(txt) {
-      document.getElementById("chatInput").value = txt;
-      sendChatMessage();
-    }
-
-    function handleChatKey(e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendChatMessage();
-      }
-    }
-
-    function clearChat() {
-      document.getElementById("chatBox").innerHTML = \`
-        <div class="chat-msg assistant">
-          <div class="chat-msg-header">
-            <span class="chat-avatar assistant">✨ Antigravity</span>
-            <span class="chat-msg-time">Ready</span>
-          </div>
-          <div class="chat-msg-body">
-            Контекст диалога очищен. Задайте новую задачу.
-          </div>
-        </div>
-      \`;
-    }
-
-    async function sendChatMessage() {
-      const inp = document.getElementById("chatInput");
-      const txt = inp.value.trim();
-      if (!txt) return;
-
-      appendChatMessage("user", txt);
-      inp.value = "";
-
-      const sendBtn = document.getElementById("chatSendBtn");
-      const stopBtn = document.getElementById("chatStopBtn");
-      sendBtn.style.display = "none";
-      stopBtn.style.display = "flex";
-
-      const assistantMsg = appendChatMessage("assistant", "⏳ Подключение к Antigravity на сервере...");
-      let accumulated = "";
-
-      chatAbortController = new AbortController();
-
-      try {
-        const response = await fetch("/api/chat/stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-agy-pin": currentPin,
-            "Authorization": "Bearer " + currentPin
-          },
-          body: JSON.stringify({
-            prompt: txt,
-            model: document.getElementById("chatModel").value,
-            preset: appState?.activePreset,
-            slot: appState?.activeSlot
-          }),
-          signal: chatAbortController.signal
-        });
-
-        const reader = response.body.getReader();
+        const reader = resp.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
 
@@ -3416,238 +2684,164 @@ class ServerDashboard {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\\n\\n");
-          buffer = parts.pop();
+          const lines = buffer.split("\\n\\n");
+          buffer = lines.pop();
 
-          for (const part of parts) {
-            if (part.startsWith("data: ")) {
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
               try {
-                const payload = JSON.parse(part.substring(6));
-                if (payload.type === "chunk") {
-                  accumulated += payload.text;
-                  assistantMsg.innerHTML = formatMarkdown(accumulated) + '<span class="typing-cursor">▌</span>';
-                  document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight;
-                } else if (payload.type === "done") {
-                  assistantMsg.innerHTML = formatMarkdown(payload.fullText || accumulated);
-                } else if (payload.type === "error") {
-                  assistantMsg.innerHTML = '<span style="color:var(--red); font-weight:600;">⚠ ' + payload.error + '</span>';
+                const ev = JSON.parse(line.slice(6));
+                if (ev.type === "thinking") {
+                  think.style.display = "block";
+                  think.textContent += ev.content;
+                } else if (ev.type === "text") {
+                  out.textContent += ev.content;
+                } else if (ev.type === "error") {
+                  out.textContent += "\\n[Error: " + ev.error + "]";
                 }
               } catch (_) {}
             }
           }
         }
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          assistantMsg.innerHTML = '<span style="color:var(--red); font-weight:600;">⚠ Ошибка соединения: ' + err.message + '</span>';
-        }
-      } finally {
-        sendBtn.style.display = "flex";
-        stopBtn.style.display = "none";
-        chatAbortController = null;
+      } catch (e) {
+        out.textContent += "\\n[Stream failed: " + e.message + "]";
       }
     }
 
-    function stopChatStream() {
-      if (chatAbortController) {
-        chatAbortController.abort();
-      }
+    async function loadPresets() {
+      const res = await fetch("/api/presets", { headers: getAuthHeaders() });
+      const data = await res.json();
+      const grid = document.getElementById("presetsGrid");
+      grid.innerHTML = "";
+      (data.presets || []).forEach(p => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.cursor = "pointer";
+        card.style.border = p.isActive ? "1px solid var(--accent)" : "1px solid var(--border)";
+        card.innerHTML = '<div style="font-size: 20px;">' + p.icon + ' <strong>' + p.name + '</strong></div>' +
+          '<div style="font-size: 12px; color: var(--text-muted); margin: 6px 0;">' + p.description + '</div>' +
+          '<button class="btn" style="width: 100%; margin-top: 8px;">' + (p.isActive ? "Active" : "Switch") + '</button>';
+        card.onclick = () => switchPreset(p.id);
+        grid.appendChild(card);
+      });
     }
 
-    // Markdown Formatter with Code Copy Blocks
-    function formatMarkdown(text) {
-      if (!text) return "";
-      let html = text
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        .replace(/\`\`\`([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)\`\`\`/g, (m, lang, code) => {
-          const language = (lang || "code").toLowerCase();
-          return '<div class="code-block">' +
-            '<div class="code-header">' +
-              '<span class="code-lang">' + language + '</span>' +
-              '<button class="copy-code-btn" onclick="copyCode(this)" title="Копировать код">📋 Copy code</button>' +
-            '</div>' +
-            '<pre><code class="language-' + language + '">' + code.trim() + '</code></pre>' +
-          '</div>';
-        })
-        .replace(/\`([^\`]+)\`/g, '<code class="inline-code">$1</code>')
-        .replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>')
-        .replace(/\\*(.*?)\\*/g, '<em>$1</em>')
-        .replace(/^### (.*$)/gim, '<h3 style="margin:8px 0 4px; font-size:14px; font-weight:700; color:#f1f5f9;">$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2 style="margin:10px 0 6px; font-size:15px; font-weight:700; color:#f8fafc;">$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1 style="margin:12px 0 8px; font-size:16.5px; font-weight:700; color:#ffffff;">$1</h1>')
-        .replace(/^\\- (.*$)/gim, '<div style="margin:2px 0; padding-left:4px;">• $1</div>')
-        .replace(/\\n/g, '<br>');
-      return html;
-    }
-
-    function copyCode(btn) {
-      const block = btn.closest('.code-block');
-      if (!block) return;
-      const code = block.querySelector('pre code');
-      if (!code) return;
-      const text = code.innerText || code.textContent;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => {
-          btn.innerHTML = '✔ Copied!';
-          btn.classList.add('copied');
-          setTimeout(() => {
-            btn.innerHTML = '📋 Copy code';
-            btn.classList.remove('copied');
-          }, 2000);
-        }).catch(() => fallbackCopy(text, btn));
-      } else {
-        fallbackCopy(text, btn);
-      }
-    }
-
-    function fallbackCopy(text, btn) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand('copy');
-        btn.innerHTML = '✔ Copied!';
-        btn.classList.add('copied');
-        setTimeout(() => {
-          btn.innerHTML = '📋 Copy code';
-          btn.classList.remove('copied');
-        }, 2000);
-      } catch (_) {}
-      document.body.removeChild(ta);
-    }
-
-    // Terminal Runner
-    async function execCommand(cmd) {
-      document.getElementById("terminalInput").value = cmd;
-      runTerminalInput();
-    }
-
-    function handleTerminalKey(e) {
-      if (e.key === "Enter") {
-        runTerminalInput();
-      } else if (e.key === "ArrowUp") {
-        if (cmdHistoryIdx > 0) {
-          cmdHistoryIdx--;
-          document.getElementById("terminalInput").value = cmdHistory[cmdHistoryIdx] || "";
-        }
-      } else if (e.key === "ArrowDown") {
-        if (cmdHistoryIdx < cmdHistory.length - 1) {
-          cmdHistoryIdx++;
-          document.getElementById("terminalInput").value = cmdHistory[cmdHistoryIdx] || "";
-        } else {
-          cmdHistoryIdx = cmdHistory.length;
-          document.getElementById("terminalInput").value = "";
-        }
-      }
-    }
-
-    async function runTerminalInput() {
-      const inp = document.getElementById("terminalInput");
-      const cmd = inp.value.trim();
-      if (!cmd) return;
-
-      cmdHistory.push(cmd);
-      cmdHistoryIdx = cmdHistory.length;
-      inp.value = "";
-
-      const box = document.getElementById("terminalBox");
-      box.textContent += "\\n$ " + cmd + "\\n[Выполняется...]";
-      box.scrollTop = box.scrollHeight;
-
-      try {
-        const res = await apiRequest("/api/terminal/exec", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command: cmd })
-        });
-        const out = (res.stdout || "") + (res.stderr ? "\\n" + res.stderr : "");
-        box.textContent = box.textContent.replace("[Выполняется...]", out.trim() + \`\\n[Exit: \${res.exitCode} | \${res.durationMs}ms]\`);
-        box.scrollTop = box.scrollHeight;
-      } catch (err) {
-        box.textContent = box.textContent.replace("[Выполняется...]", "Ошибка: " + err.message);
-      }
-    }
-
-    function clearTerminal() {
-      document.getElementById("terminalBox").textContent = "Antigravity Web Console [v3.0.0]\\n";
-    }
-
-    // Logs & Artifacts Tab
-    function switchLogsSubTab(sub) {
-      const isLogs = sub === "logs";
-      document.getElementById("subViewLogs").style.display = isLogs ? "block" : "none";
-      document.getElementById("subViewDocs").style.display = isLogs ? "none" : "block";
-      document.getElementById("btnSubLogs").className = isLogs ? "btn btn-primary" : "btn btn-ghost";
-      document.getElementById("btnSubDocs").className = !isLogs ? "btn btn-primary" : "btn btn-ghost";
-      if (!isLogs) fetchArtifacts();
-    }
-
-    async function fetchLogs() {
-      const type = document.getElementById("logTypeSelect").value;
-      try {
-        const data = await apiRequest("/api/logs?type=" + type + "&lines=120");
-        if (data.ok) {
-          const box = document.getElementById("logsBox");
-          box.textContent = data.content || "Лог пуст";
-          box.scrollTop = box.scrollHeight;
-        }
-      } catch (_) {}
-    }
-
-    function toggleLogAutoRefresh() {
-      const checked = document.getElementById("logAutoRefresh").checked;
-      if (checked) {
-        logAutoInterval = setInterval(fetchLogs, 3000);
-      } else {
-        clearInterval(logAutoInterval);
-        logAutoInterval = null;
-      }
-    }
-
-    async function fetchArtifacts() {
-      try {
-        const data = await apiRequest("/api/artifacts");
-        if (data.ok) {
-          const cont = document.getElementById("artifactsList");
-          if ((data.artifacts || []).length === 0) {
-            cont.innerHTML = "<div style='font-size:12px; color:var(--text-muted); padding:10px;'>Нет сгенерированных артефактов в brain/.</div>";
-            return;
-          }
-          cont.innerHTML = data.artifacts.map(a => \`
-            <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); padding:10px 14px; border-radius:10px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="viewArtifact('\${a.cid}', '\${a.name}')">
-              <div>
-                <div style="font-size:13px; font-weight:600;">\${a.title}</div>
-                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">\${a.name} (\${Math.round(a.size/1024)} KB) • \${a.mtimeFormatted}</div>
-              </div>
-              <button class="btn" style="font-size:11px; padding:3px 10px;">Открыть</button>
-            </div>
-          \`).join("");
-        }
-      } catch (_) {}
-    }
-
-    async function viewArtifact(cid, name) {
-      try {
-        const data = await apiRequest("/api/artifact-content?cid=" + cid + "&name=" + encodeURIComponent(name));
-        if (data.ok) {
-          document.getElementById("artifactTitle").innerText = name;
-          document.getElementById("artifactViewer").innerHTML = formatMarkdown(data.content);
-        }
-      } catch (_) {}
-    }
-
-    // App Initialization
-    function initApp() {
-      syncState();
+    async function switchPreset(id) {
+      await fetch("/api/presets/switch", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ preset: id })
+      });
       loadPresets();
-      setInterval(syncState, 4000);
     }
 
-    if (currentPin) {
-      initApp();
-    } else {
-      showLockScreen();
+    async function loadAccounts() {
+      const res = await fetch("/api/accounts", { headers: getAuthHeaders() });
+      const data = await res.json();
+      const container = document.getElementById("accountsSlots");
+      container.innerHTML = "";
+      (data.accounts || []).forEach(a => {
+        const d = document.createElement("div");
+        d.className = "card";
+        d.style.flex = "1";
+        d.style.textAlign = "center";
+        d.style.border = (a.slot === data.activeSlot) ? "1px solid var(--green)" : "1px solid var(--border)";
+        d.innerHTML = '<div style="font-size: 24px;">👤</div><strong>Slot ' + a.slot + '</strong><br><span style="font-size: 12px; color: var(--text-muted);">' + (a.email || "Active") + '</span>';
+        container.appendChild(d);
+      });
     }
+
+    async function rotateAccount() {
+      await fetch("/api/accounts/rotate", { method: "POST", headers: getAuthHeaders() });
+      loadAccounts();
+    }
+
+    async function loadTree() {
+      const res = await fetch("/api/fs/tree", { headers: getAuthHeaders() });
+      const data = await res.json();
+      const treeBox = document.getElementById("fileTree");
+      treeBox.innerHTML = "";
+      function renderNodes(nodes, el) {
+        nodes.forEach(n => {
+          const item = document.createElement("div");
+          item.style.padding = "2px 0";
+          item.style.cursor = "pointer";
+          item.textContent = (n.isDir ? "📁 " : "📄 ") + n.name;
+          if (n.isDir && n.children) {
+            const sub = document.createElement("div");
+            sub.style.paddingLeft = "14px";
+            renderNodes(n.children, sub);
+            item.appendChild(sub);
+          } else if (!n.isDir) {
+            item.onclick = (e) => { e.stopPropagation(); openFile(n.path); };
+          }
+          el.appendChild(item);
+        });
+      }
+      renderNodes(data.tree || [], treeBox);
+    }
+
+    async function openFile(relPath) {
+      currentOpenPath = relPath;
+      document.getElementById("activeFilePath").textContent = relPath;
+      const res = await fetch("/api/fs/read?path=" + encodeURIComponent(relPath), { headers: getAuthHeaders() });
+      const data = await res.json();
+      document.getElementById("fileEditor").value = data.content || "";
+    }
+
+    async function saveActiveFile() {
+      if (!currentOpenPath) return;
+      const content = document.getElementById("fileEditor").value;
+      await fetch("/api/fs/write", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ path: currentOpenPath, content })
+      });
+      alert("File saved: " + currentOpenPath);
+    }
+
+    async function loadGitDiff() {
+      const res = await fetch("/api/git/diff", { headers: getAuthHeaders() });
+      const data = await res.json();
+      document.getElementById("activeFilePath").textContent = "Git Diff (Working Tree)";
+      document.getElementById("fileEditor").value = (data.status ? "--- STATUS ---\\n" + data.status + "\\n\\n" : "") + data.diff;
+    }
+
+    function initTerminal() {
+      if (wsTerm) return;
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const url = protocol + "//" + location.host + "/ws/terminal?pin=" + activePin;
+      wsTerm = new WebSocket(url);
+      const screen = document.getElementById("terminalScreen");
+      wsTerm.onopen = () => {
+        document.getElementById("termStatus").textContent = "Connected";
+        wsTerm.send(JSON.stringify({ type: "resize", cols: 120, rows: 30 }));
+      };
+      wsTerm.onmessage = (e) => {
+        screen.textContent += e.data;
+        screen.scrollTop = screen.scrollHeight;
+      };
+      wsTerm.onclose = () => {
+        document.getElementById("termStatus").textContent = "Disconnected";
+        wsTerm = null;
+      };
+    }
+
+    function sendTermCommand() {
+      const inp = document.getElementById("termInput");
+      const cmd = inp.value;
+      if (!wsTerm || wsTerm.readyState !== WebSocket.OPEN) return;
+      wsTerm.send(cmd + "\\r\\n");
+      inp.value = "";
+    }
+
+    async function loadLogs(type) {
+      const res = await fetch("/api/logs?type=" + type, { headers: getAuthHeaders() });
+      const data = await res.json();
+      document.getElementById("logsOutput").textContent = data.content || "";
+    }
+
+    checkAuth();
   </script>
 </body>
 </html>`;
@@ -3655,75 +2849,36 @@ class ServerDashboard {
 }
 
 // -----------------------------------------------------------------------------
-// CLI Arguments Parsing & Entrypoint
+// CLI Argument Parsing & Direct Execution
 // -----------------------------------------------------------------------------
-function parseCliArgs() {
-    let confHost = null, confPort = null, confPin = null;
-    const etcConf = "/etc/antigravity/web.conf";
-    if (fs.existsSync(etcConf)) {
-        try {
-            const raw = fs.readFileSync(etcConf, "utf8");
-            for (const line of raw.split("\n")) {
-                const tr = line.trim();
-                if (!tr || tr.startsWith("#") || tr.startsWith(";")) continue;
-                const eq = tr.indexOf("=");
-                if (eq !== -1) {
-                    const k = tr.slice(0, eq).trim().toUpperCase();
-                    const v = tr.slice(eq + 1).trim().replace(/^['"]|['"]$/g, "");
-                    if (k === "HOST") confHost = v;
-                    else if (k === "PORT") confPort = parseInt(v, 10);
-                    else if (k === "PIN") confPin = v;
-                }
-            }
-        } catch (_) {}
-    }
-
+function parseArgs() {
     const args = process.argv.slice(2);
-    const options = {
-        host: process.env.AGY_HOST || process.env.HOST || confHost || "0.0.0.0",
-        port: parseInt(process.env.AGY_PORT || process.env.PORT || "", 10) || confPort || 51125,
-        pin: process.env.AGY_PIN || process.env.PIN || confPin || null,
-        workspace: process.env.AGY_WORKSPACE || process.cwd()
-    };
-
+    const options = {};
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === "--host" && i + 1 < args.length) {
             options.host = args[++i];
         } else if ((arg === "--port" || arg === "-p") && i + 1 < args.length) {
-            options.port = parseInt(args[++i], 10) || 51125;
+            options.port = parseInt(args[++i], 10);
         } else if (arg === "--pin" && i + 1 < args.length) {
-            options.pin = String(args[++i]).trim();
+            options.pin = args[++i];
         } else if ((arg === "--workspace" || arg === "-w") && i + 1 < args.length) {
-            options.workspace = path.resolve(args[++i]);
-        } else if (arg === "--help" || arg === "-h") {
-            console.log(`
-Absolute Antigravity Server Dashboard (v${VERSION})
-Usage: node scripts/server_dashboard.js [options]
-
-Options:
-  --host <ip>          Bind host address (default: 0.0.0.0)
-  --port, -p <port>    Listen port (default: 51125)
-  --pin <6-digits>     Static 6-digit PIN code (generates random PIN if omitted)
-  --workspace, -w <dir> Active workspace directory (default: current working dir)
-  --help, -h           Show this help message
-`);
-            process.exit(0);
+            options.workspace = args[++i];
         }
     }
     return options;
 }
 
 if (require.main === module) {
-    const opts = parseCliArgs();
+    const opts = parseArgs();
     const dashboard = new ServerDashboard(opts);
     dashboard.start().catch((err) => {
-        console.error("Fatal: failed to start server dashboard:", err);
+        console.error("Fatal: failed to start dashboard server:", err);
         process.exit(1);
     });
 
     const shutdown = async () => {
-        console.log("\n[Shutdown] Stopping Server Dashboard...");
+        console.log("\nInitiating graceful shutdown...");
         await dashboard.stop();
         process.exit(0);
     };
@@ -3734,14 +2889,17 @@ if (require.main === module) {
 
 module.exports = {
     ServerDashboard,
-    generateSecurePin,
-    getPrimaryLanIp,
+    RawWebSocket,
+    mapToAntigravityModel,
+    getLanguageServerSession,
+    lsRpcRequest,
+    scanFsTree,
+    getMimeType,
     getAllPresets,
     getActivePreset,
     applyPreset,
     getAccountSlotsStatus,
     rotateAccountSlot,
-    inspectWorkspace,
-    getLogs,
-    getArtifactsList
+    toggleAutoFailover,
+    VERSION
 };

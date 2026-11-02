@@ -14,6 +14,9 @@ pub const EMBEDDED_PRESETS_YAML: &str = include_str!("../../../../presets.yaml")
 /// Compile-time embedded server dashboard script (`scripts/server_dashboard.js`).
 pub const EMBEDDED_DASHBOARD_JS: &str = include_str!("../../../../scripts/server_dashboard.js");
 
+/// Compile-time embedded Modern AI Web Studio bundle (`web/dist/index.html`).
+pub const EMBEDDED_STUDIO_HTML: &str = include_str!("../../../../web/dist/index.html");
+
 /// Compile-time embedded JSON schema for presets (`schemas/presets.schema.json`).
 pub const EMBEDDED_SCHEMA_JSON: &str = include_str!("../../../../schemas/presets.schema.json");
 
@@ -178,6 +181,19 @@ pub fn extract_dashboard_to(target_dir: &Path) -> std::io::Result<PathBuf> {
 
     if needs_extract {
         std::fs::write(&target_file, EMBEDDED_DASHBOARD_JS)?;
+    }
+
+    // Also extract the embedded Modern AI Studio single-file HTML bundle alongside the script
+    let html_file = target_dir.join("index.html");
+    let needs_extract_html = if !html_file.exists() {
+        true
+    } else if let Ok(metadata) = std::fs::metadata(&html_file) {
+        metadata.len() != EMBEDDED_STUDIO_HTML.len() as u64
+    } else {
+        true
+    };
+    if needs_extract_html {
+        let _ = std::fs::write(&html_file, EMBEDDED_STUDIO_HTML);
     }
 
     Ok(target_file)

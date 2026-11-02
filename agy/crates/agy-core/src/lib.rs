@@ -16,7 +16,7 @@ pub use log_watcher::{LogTailWatcher, QuotaTriggerEvent};
 pub use portable::{
     check_portable_mode, extract_dashboard_if_needed, extract_dashboard_to, get_base_dir,
     get_config_dir, get_credentials_path, get_log_dir, get_skills_dir, is_portable_mode,
-    EMBEDDED_DASHBOARD_JS, EMBEDDED_PRESETS_YAML, EMBEDDED_SCHEMA_JSON,
+    EMBEDDED_DASHBOARD_JS, EMBEDDED_PRESETS_YAML, EMBEDDED_SCHEMA_JSON, EMBEDDED_STUDIO_HTML,
 };
 pub use presets::{
     build_preset_system_prompt, resolve_preset, Preset, PresetManager, PresetsManifest,

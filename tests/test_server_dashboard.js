@@ -1,12 +1,14 @@
 // tests/test_server_dashboard.js
-// Automated verification suite for scripts/server_dashboard.js
+// Comprehensive automated verification suite for scripts/server_dashboard.js (v4.0)
 
 const http = require("http");
 const path = require("path");
+const fs = require("fs");
 const assert = require("assert");
-const { ServerDashboard } = require("../scripts/server_dashboard");
+const { ServerDashboard, mapToAntigravityModel } = require("../scripts/server_dashboard");
 
 const TEST_PORT = 51199;
+const MOCK_LS_PORT = 51198;
 const TEST_PIN = "998877";
 
 function makeRequest(method, endpoint, headers = {}, body = null) {
@@ -51,14 +53,15 @@ function makeRequest(method, endpoint, headers = {}, body = null) {
 
 async function runTests() {
     console.log("==============================================================================");
-    console.log("   ANTIGRAVITY SERVER DASHBOARD TEST SUITE");
+    console.log("   ANTIGRAVITY SERVER DASHBOARD & WEB STUDIO TEST SUITE (v4.0)");
     console.log("==============================================================================");
 
+    const testWorkspace = path.resolve(__dirname, "..");
     const dashboard = new ServerDashboard({
         host: "127.0.0.1",
         port: TEST_PORT,
         pin: TEST_PIN,
-        workspace: path.resolve(__dirname, "..")
+        workspace: testWorkspace
     });
 
     await dashboard.start();
@@ -78,23 +81,68 @@ async function runTests() {
         }
     }
 
+    // Set up a mock local Antigravity Language Server for testing Cascade API
+    let mockLsCalls = [];
+    const mockLsServer = http.createServer((req, res) => {
+        let bodyStr = "";
+        req.on("data", c => { bodyStr += c; });
+        req.on("end", () => {
+            const url = req.url;
+            mockLsCalls.push({ url, headers: req.headers, body: bodyStr });
+            res.setHeader("Content-Type", "application/json");
+
+            if (url.includes("StartCascade")) {
+                res.writeHead(200);
+                res.end(JSON.stringify({ cascadeId: "mock-cascade-test-77" }));
+            } else if (url.includes("SendUserCascadeMessage")) {
+                res.writeHead(200);
+                res.end(JSON.stringify({ ok: true }));
+            } else if (url.includes("GetCascadeTrajectorySteps")) {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                    steps: [
+                        {
+                            type: "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                            status: "CORTEX_STEP_STATUS_DONE",
+                            plannerResponse: {
+                                thinking: "Thinking deeply about Antigravity architecture...",
+                                response: "Hello from Antigravity Cascade Agent!"
+                            }
+                        }
+                    ]
+                }));
+            } else {
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: "not found" }));
+            }
+        });
+    });
+
+    await new Promise(r => mockLsServer.listen(MOCK_LS_PORT, "127.0.0.1", r));
+    console.log("✔ Mock Antigravity Language Server listening on port", MOCK_LS_PORT);
+
+    // Save previous env vars
+    const prevLsPort = process.env.AGY_LS_PORT;
+    const prevLsCsrf = process.env.AGY_LS_CSRF;
+    process.env.AGY_LS_PORT = String(MOCK_LS_PORT);
+    process.env.AGY_LS_CSRF = "mock-csrf-token-12345";
+
+    let sessionToken = null;
+
     try {
-        // 1. Root SPA HTML delivery
-        await test("GET / serves single page application with all 6 tabs", async () => {
+        // ---------------------------------------------------------------------
+        // 1. Root UI SPA Delivery (serves web/dist/index.html or built-in Studio)
+        // ---------------------------------------------------------------------
+        await test("GET / serves single page application (web/dist or built-in studio)", async () => {
             const res = await makeRequest("GET", "/");
             assert.strictEqual(res.statusCode, 200);
             assert.ok(res.headers["content-type"].includes("text/html"));
-            assert.ok(res.raw.includes("Absolute Antigravity | Server Dashboard"));
-            assert.ok(res.raw.includes("tab-chat"));
-            assert.ok(res.raw.includes("tab-presets"));
-            assert.ok(res.raw.includes("tab-accounts"));
-            assert.ok(res.raw.includes("tab-workspaces"));
-            assert.ok(res.raw.includes("tab-terminal"));
-            assert.ok(res.raw.includes("tab-logs"));
-            assert.ok(res.raw.includes("lockScreen"));
+            assert.ok(res.raw.includes("Antigravity"));
         });
 
-        // 2. Auth rejection on wrong PIN
+        // ---------------------------------------------------------------------
+        // 2. PIN Authentication & Session Token Generation
+        // ---------------------------------------------------------------------
         await test("POST /api/auth rejects invalid PIN with 401", async () => {
             const res = await makeRequest("POST", "/api/auth", {}, { pin: "000000" });
             assert.strictEqual(res.statusCode, 401);
@@ -102,42 +150,57 @@ async function runTests() {
             assert.ok(res.json.error.includes("Неверный PIN"));
         });
 
-        // 3. Auth success on valid PIN
-        await test("POST /api/auth accepts valid PIN and returns token", async () => {
+        await test("POST /api/auth accepts valid PIN and returns session token and Set-Cookie", async () => {
             const res = await makeRequest("POST", "/api/auth", {}, { pin: TEST_PIN });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
             assert.strictEqual(res.json.pin, TEST_PIN);
             assert.ok(res.json.token);
+            assert.ok(res.headers["set-cookie"]);
+            assert.ok(res.headers["set-cookie"][0].includes("agy_token="));
+            sessionToken = res.json.token;
         });
 
-        // 4. Unauthorized rejection on protected endpoints
-        await test("GET /api/state rejects unauthenticated requests with 401", async () => {
+        // ---------------------------------------------------------------------
+        // 3. Security & Protected Endpoints Authorization
+        // ---------------------------------------------------------------------
+        await test("Protected endpoints reject unauthenticated requests with 401", async () => {
             const res = await makeRequest("GET", "/api/state");
             assert.strictEqual(res.statusCode, 401);
             assert.strictEqual(res.json.ok, false);
         });
 
-        // 5. GET /api/state with valid auth header
-        await test("GET /api/state returns full system status with x-agy-pin", async () => {
-            const res = await makeRequest("GET", "/api/state", { "x-agy-pin": TEST_PIN });
+        await test("Protected endpoints accept Authorization: Bearer <token>", async () => {
+            const res = await makeRequest("GET", "/api/state", { "Authorization": `Bearer ${sessionToken}` });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
             assert.ok(res.json.server);
-            assert.ok(res.json.server.version);
             assert.ok(res.json.activePreset);
             assert.ok(res.json.workspace);
-            assert.ok(Array.isArray(res.json.slots));
-            assert.ok(typeof res.json.activeSlot === "number");
         });
 
-        // 6. GET /api/presets
+        await test("Protected endpoints accept Cookie: agy_token=<token>", async () => {
+            const res = await makeRequest("GET", "/api/state", { "Cookie": `agy_token=${sessionToken}` });
+            assert.strictEqual(res.statusCode, 200);
+            assert.strictEqual(res.json.ok, true);
+        });
+
+        await test("Localhost request allows bypass with ?pin= query parameter", async () => {
+            const res = await makeRequest("GET", `/api/state?pin=${TEST_PIN}`);
+            assert.strictEqual(res.statusCode, 200);
+            assert.strictEqual(res.json.ok, true);
+        });
+
+        // ---------------------------------------------------------------------
+        // 4. Presets API (16 Presets Invariant & Overlays)
+        // ---------------------------------------------------------------------
         await test("GET /api/presets returns all 16 presets with skills and metadata", async () => {
-            const res = await makeRequest("GET", "/api/presets", { "Authorization": `Bearer ${TEST_PIN}` });
+            const res = await makeRequest("GET", "/api/presets", { "Authorization": `Bearer ${sessionToken}` });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
             assert.strictEqual(res.json.count, 16);
             assert.strictEqual(res.json.presets.length, 16);
+            assert.ok(Array.isArray(res.json.commonOverlays));
 
             const presetIds = res.json.presets.map(p => p.id);
             const expected = [
@@ -150,79 +213,131 @@ async function runTests() {
             }
         });
 
-        // 7. POST /api/switch-preset
-        await test("POST /api/switch-preset switches preset and returns result", async () => {
-            const res = await makeRequest("POST", "/api/switch-preset", { "x-agy-pin": TEST_PIN }, {
+        await test("POST /api/presets/switch switches preset and applies overlays", async () => {
+            const res = await makeRequest("POST", "/api/presets/switch", { "Authorization": `Bearer ${sessionToken}` }, {
                 preset: "orchestrator",
-                overlays: ["+qa"]
+                overlays: ["+qa", "+docker"]
             });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
             assert.strictEqual(res.json.activePreset, "orchestrator");
         });
 
-        // 8. GET /api/slots
-        await test("GET /api/slots returns account slots info", async () => {
-            const res = await makeRequest("GET", "/api/slots", { "x-agy-pin": TEST_PIN });
+        // ---------------------------------------------------------------------
+        // 5. Multi-Account Carousel & Slots API
+        // ---------------------------------------------------------------------
+        await test("GET /api/accounts returns accounts carousel status", async () => {
+            const res = await makeRequest("GET", "/api/accounts", { "Authorization": `Bearer ${sessionToken}` });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
             assert.ok(res.json.slotsCount >= 1);
             assert.ok(Array.isArray(res.json.accounts));
         });
 
-        // 9. POST /api/switch-slot
-        await test("POST /api/switch-slot rotates or switches slot", async () => {
-            const res = await makeRequest("POST", "/api/switch-slot", { "x-agy-pin": TEST_PIN }, {
+        await test("POST /api/accounts/switch-slot switches to target slot", async () => {
+            const res = await makeRequest("POST", "/api/accounts/switch-slot", { "Authorization": `Bearer ${sessionToken}` }, {
                 slot: 1
             });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
         });
 
-        // 10. GET /api/workspaces
-        await test("GET /api/workspaces returns recent workspaces and current info", async () => {
-            const res = await makeRequest("GET", "/api/workspaces", { "x-agy-pin": TEST_PIN });
+        await test("POST /api/accounts/rotate rotates active slot", async () => {
+            const res = await makeRequest("POST", "/api/accounts/rotate", { "Authorization": `Bearer ${sessionToken}` });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
-            assert.ok(res.json.current);
-            assert.ok(Array.isArray(res.json.workspaces));
         });
 
-        // 11. POST /api/terminal/exec
-        await test("POST /api/terminal/exec executes command and returns stdout", async () => {
-            const res = await makeRequest("POST", "/api/terminal/exec", { "x-agy-pin": TEST_PIN }, {
-                command: 'node -e "console.log(\'SERVER_DASHBOARD_OK\')"'
+        await test("POST /api/toggle-autofailover toggles auto failover setting", async () => {
+            const res = await makeRequest("POST", "/api/toggle-autofailover", { "Authorization": `Bearer ${sessionToken}` }, {
+                enabled: true
             });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
-            assert.ok(res.json.stdout.includes("SERVER_DASHBOARD_OK"));
-            assert.strictEqual(res.json.exitCode, 0);
-            assert.ok(typeof res.json.durationMs === "number");
         });
 
-        // 12. GET /api/logs
-        await test("GET /api/logs returns server_dashboard activity logs", async () => {
-            const res = await makeRequest("GET", "/api/logs?type=server_dashboard&lines=20", { "x-agy-pin": TEST_PIN });
+        // ---------------------------------------------------------------------
+        // 6. Workspace File Explorer & Sandboxed Editor API
+        // ---------------------------------------------------------------------
+        await test("GET /api/fs/tree returns recursive workspace tree excluding ignored dirs", async () => {
+            const res = await makeRequest("GET", "/api/fs/tree?path=.", { "Authorization": `Bearer ${sessionToken}` });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
-            assert.ok(res.json.content.length > 0);
+            assert.ok(Array.isArray(res.json.tree));
+
+            const names = res.json.tree.map(t => t.name);
+            assert.ok(names.includes("scripts"), "scripts folder must be present in tree");
+            assert.ok(!names.includes("node_modules"), "node_modules must be excluded");
+            assert.ok(!names.includes(".git"), ".git must be excluded");
         });
 
-        // 13. GET /api/artifacts
-        await test("GET /api/artifacts returns list of artifacts", async () => {
-            const res = await makeRequest("GET", "/api/artifacts", { "x-agy-pin": TEST_PIN });
+        await test("GET /api/fs/read prevents directory traversal outside workspace", async () => {
+            const res = await makeRequest("GET", "/api/fs/read?path=../../windows/win.ini", { "Authorization": `Bearer ${sessionToken}` });
+            assert.strictEqual(res.statusCode, 403);
+            assert.strictEqual(res.json.ok, false);
+            assert.ok(res.json.error.includes("Access denied"));
+        });
+
+        await test("POST /api/fs/write and GET /api/fs/read safely write and read files with MIME detection", async () => {
+            const testRelPath = ".agy/test_dashboard_sample.js";
+            const testContent = "console.log('ANTIGRAVITY_DASHBOARD_SAMPLE_OK');\n";
+
+            const writeRes = await makeRequest("POST", "/api/fs/write", { "Authorization": `Bearer ${sessionToken}` }, {
+                path: testRelPath,
+                content: testContent
+            });
+            assert.strictEqual(writeRes.statusCode, 200);
+            assert.strictEqual(writeRes.json.ok, true);
+            assert.strictEqual(writeRes.json.bytesWritten, Buffer.byteLength(testContent, "utf-8"));
+
+            const readRes = await makeRequest("GET", `/api/fs/read?path=${encodeURIComponent(testRelPath)}`, { "Authorization": `Bearer ${sessionToken}` });
+            assert.strictEqual(readRes.statusCode, 200);
+            assert.strictEqual(readRes.json.ok, true);
+            assert.strictEqual(readRes.json.content, testContent);
+            assert.strictEqual(readRes.json.mime, "application/javascript");
+
+            // Clean up test file
+            const fullTestFile = path.resolve(testWorkspace, testRelPath);
+            if (fs.existsSync(fullTestFile)) {
+                fs.unlinkSync(fullTestFile);
+            }
+        });
+
+        await test("GET /api/git/diff returns git status and diff output", async () => {
+            const res = await makeRequest("GET", "/api/git/diff", { "Authorization": `Bearer ${sessionToken}` });
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(res.json.ok, true);
-            assert.ok(Array.isArray(res.json.artifacts));
+            assert.ok(typeof res.json.status === "string");
+            assert.ok(typeof res.json.diff === "string");
         });
 
-        // 14. POST /api/chat/stream SSE
-        await test("POST /api/chat/stream delivers Server-Sent Events stream", async () => {
+        // ---------------------------------------------------------------------
+        // 7. Native Antigravity Cascade Agent Streaming API
+        // ---------------------------------------------------------------------
+        await test("Model mapping maps aliases to Antigravity internal planner models", async () => {
+            assert.strictEqual(mapToAntigravityModel("gemini-3.8-flash-high"), "MODEL_PLACEHOLDER_M318");
+            assert.strictEqual(mapToAntigravityModel("flash"), "MODEL_PLACEHOLDER_M318");
+            assert.strictEqual(mapToAntigravityModel("gemini-2.5-pro"), "MODEL_GOOGLE_GEMINI_2_5_PRO");
+            assert.strictEqual(mapToAntigravityModel("claude-sonnet-4-6"), "MODEL_PLACEHOLDER_M35");
+            assert.strictEqual(mapToAntigravityModel("claude-opus-4-6-thinking"), "MODEL_PLACEHOLDER_M26");
+            assert.strictEqual(mapToAntigravityModel("gemini-2.5-flash"), "MODEL_GOOGLE_GEMINI_2_5_FLASH");
+        });
+
+        await test("GET /api/cascade/status reports active Language Server health", async () => {
+            const res = await makeRequest("GET", "/api/cascade/status", { "Authorization": `Bearer ${sessionToken}` });
+            assert.strictEqual(res.statusCode, 200);
+            assert.strictEqual(res.json.ok, true);
+            assert.strictEqual(res.json.active, true);
+            assert.strictEqual(res.json.port, MOCK_LS_PORT);
+            assert.strictEqual(res.json.health, "ONLINE");
+        });
+
+        await test("POST /api/chat/stream connects to Language Server and streams thinking, text, and done events", async () => {
             const body = JSON.stringify({
-                prompt: "Тестовый пинг",
-                preset: "minimal",
-                slot: 1
+                prompt: "Explain Antigravity Cascade streaming in one sentence",
+                model: "gemini-3.8-flash-high"
             });
+
             const sseRes = await new Promise((resolve, reject) => {
                 const req = http.request({
                     hostname: "127.0.0.1",
@@ -232,7 +347,7 @@ async function runTests() {
                     headers: {
                         "Content-Type": "application/json",
                         "Content-Length": Buffer.byteLength(body),
-                        "x-agy-pin": TEST_PIN
+                        "Authorization": `Bearer ${sessionToken}`
                     }
                 }, (res) => {
                     let text = "";
@@ -248,12 +363,94 @@ async function runTests() {
 
             assert.strictEqual(sseRes.statusCode, 200);
             assert.ok(sseRes.headers["content-type"].includes("text/event-stream"));
-            assert.ok(sseRes.text.includes("data: "));
+            assert.ok(sseRes.text.includes('"type":"thinking"'));
+            assert.ok(sseRes.text.includes('"type":"text"'));
+            assert.ok(sseRes.text.includes('"type":"done"'));
+            assert.ok(sseRes.text.includes("Hello from Antigravity Cascade Agent!"));
+            assert.ok(sseRes.text.includes("MODEL_PLACEHOLDER_M318"));
         });
 
-        // 15. Brute-Force Rate Limiting (5 failed attempts -> 15 min lock)
+        // ---------------------------------------------------------------------
+        // 8. Pure Node.js RFC 6455 WebSocket Interactive Terminal (/ws/terminal)
+        // ---------------------------------------------------------------------
+        await test("WebSocket /ws/terminal rejects unauthenticated connection with 401", async () => {
+            const unauthorized = await new Promise((resolve) => {
+                const ws = new globalThis.WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws/terminal`);
+                ws.onerror = () => { resolve(true); };
+                ws.onopen = () => { ws.close(); resolve(false); };
+            });
+            assert.strictEqual(unauthorized, true);
+        });
+
+        await test("WebSocket /ws/terminal connects with PIN, pipes shell bidirectional stream, and supports resize", async () => {
+            const wsUrl = `ws://127.0.0.1:${TEST_PORT}/ws/terminal?pin=${TEST_PIN}`;
+            const ws = new globalThis.WebSocket(wsUrl);
+
+            let receivedData = "";
+            let receivedEcho = false;
+
+            const wsSuccess = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    ws.close();
+                    reject(new Error("WebSocket terminal communication timed out"));
+                }, 8000);
+
+                ws.onopen = () => {
+                    // Send terminal resize control message
+                    ws.send(JSON.stringify({ type: "resize", cols: 120, rows: 30 }));
+
+                    // Send shell command
+                    const cmd = process.platform === "win32"
+                        ? "Write-Output 'TERMINAL_STREAM_OK'\r\n"
+                        : "echo 'TERMINAL_STREAM_OK'\n";
+                    ws.send(cmd);
+                };
+
+                ws.onmessage = (event) => {
+                    receivedData += event.data;
+                    if (receivedData.includes("TERMINAL_STREAM_OK")) {
+                        receivedEcho = true;
+                        clearTimeout(timeout);
+                        ws.close();
+                        resolve(true);
+                    }
+                };
+
+                ws.onerror = (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                };
+            });
+
+            assert.strictEqual(wsSuccess, true);
+            assert.strictEqual(receivedEcho, true);
+        });
+
+        // ---------------------------------------------------------------------
+        // 9. Interactive Console Exec & Logs Endpoints
+        // ---------------------------------------------------------------------
+        await test("POST /api/terminal/exec executes command and returns stdout", async () => {
+            const res = await makeRequest("POST", "/api/terminal/exec", { "Authorization": `Bearer ${sessionToken}` }, {
+                command: 'node -e "console.log(\'SERVER_DASHBOARD_OK\')"'
+            });
+            assert.strictEqual(res.statusCode, 200);
+            assert.strictEqual(res.json.ok, true);
+            assert.ok(res.json.stdout.includes("SERVER_DASHBOARD_OK"));
+            assert.strictEqual(res.json.exitCode, 0);
+        });
+
+        await test("GET /api/logs returns server_dashboard activity logs", async () => {
+            const res = await makeRequest("GET", "/api/logs?type=server_dashboard&lines=20", { "Authorization": `Bearer ${sessionToken}` });
+            assert.strictEqual(res.statusCode, 200);
+            assert.strictEqual(res.json.ok, true);
+            assert.ok(res.json.content.length > 0);
+        });
+
+        // ---------------------------------------------------------------------
+        // 10. Brute-Force Rate Limiting (5 failed attempts -> 15 min lock)
+        // ---------------------------------------------------------------------
         await test("Brute-Force Rate Limiting locks out IP with 429 after 5 failed attempts", async () => {
-            const testAttackerIp = "198.51.100.99";
+            const testAttackerIp = "198.51.100.77";
             const attackerHeaders = { "x-forwarded-for": testAttackerIp };
 
             for (let i = 1; i <= 4; i++) {
@@ -262,19 +459,28 @@ async function runTests() {
                 assert.strictEqual(failRes.json.ok, false);
             }
 
-            // 5th failed attempt should trigger lockout (429)
+            // 5th failed attempt triggers lockout (429)
             const lockRes = await makeRequest("POST", "/api/auth", attackerHeaders, { pin: "111111" });
             assert.strictEqual(lockRes.statusCode, 429);
             assert.strictEqual(lockRes.json.ok, false);
             assert.ok(lockRes.headers["retry-after"]);
             assert.ok(lockRes.json.error.includes("заблокирован"));
 
-            // Subsequent requests from locked IP should be blocked immediately
+            // Subsequent requests from locked IP should be rejected immediately
             const blockedStateRes = await makeRequest("GET", "/api/state", attackerHeaders);
             assert.strictEqual(blockedStateRes.statusCode, 429);
         });
 
     } finally {
+        // Restore environment variables
+        if (prevLsPort) process.env.AGY_LS_PORT = prevLsPort;
+        else delete process.env.AGY_LS_PORT;
+        if (prevLsCsrf) process.env.AGY_LS_CSRF = prevLsCsrf;
+        else delete process.env.AGY_LS_CSRF;
+
+        await new Promise(r => mockLsServer.close(r));
+        console.log("✔ Mock Language Server stopped");
+
         await dashboard.stop();
         console.log("✔ ServerDashboard stopped");
     }
