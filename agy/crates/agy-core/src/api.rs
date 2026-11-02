@@ -1,8 +1,10 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
 use thiserror::Error;
 
-pub const DEFAULT_MODEL: &str = "gemini-2.0-flash";
+pub const DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
 pub const DEFAULT_ENDPOINT_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 #[derive(Error, Debug)]
@@ -23,6 +25,8 @@ pub enum ApiError {
     InvalidRequest(String),
     #[error("Stream error: {0}")]
     Stream(String),
+    #[error("Language server error: {0}")]
+    LanguageServer(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,6 +34,172 @@ pub struct ChatMessage {
     pub role: String, // "user" or "model"
     pub content: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanguageServerSession {
+    pub port: u16,
+    pub csrf: String,
+    #[serde(default)]
+    pub pid: Option<u32>,
+}
+
+/// Maps user-facing model names or aliases to Antigravity's internal planner model enums.
+pub fn map_to_antigravity_model(model: &str) -> &'static str {
+    let lower = model.to_lowercase();
+    let clean = lower.trim().trim_start_matches("models/");
+
+    match clean {
+        "gemini-3.8-flash-high" | "flash" | "fast" | "3.8" | "flash-high" => "MODEL_PLACEHOLDER_M318",
+        "gemini-2.5-pro" | "pro" | "deep" | "2.5-pro" => "MODEL_GOOGLE_GEMINI_2_5_PRO",
+        "claude-sonnet-4-6" | "sonnet" | "claude-sonnet" => "MODEL_PLACEHOLDER_M35",
+        "claude-opus-4-6-thinking" | "opus" | "claude-opus" => "MODEL_PLACEHOLDER_M26",
+        "gemini-2.5-flash" | "flash-lite" | "lite" => "MODEL_GOOGLE_GEMINI_2_5_FLASH",
+        "gemini-3.8-flash-medium" => "MODEL_PLACEHOLDER_M319",
+        "gemini-3.8-flash-low" => "MODEL_PLACEHOLDER_M320",
+        // Direct pass-through if already in internal format
+        m if m.starts_with("model_") => match m {
+            "model_placeholder_m318" => "MODEL_PLACEHOLDER_M318",
+            "model_google_gemini_2_5_pro" => "MODEL_GOOGLE_GEMINI_2_5_PRO",
+            "model_placeholder_m35" => "MODEL_PLACEHOLDER_M35",
+            "model_placeholder_m26" => "MODEL_PLACEHOLDER_M26",
+            "model_google_gemini_2_5_flash" => "MODEL_GOOGLE_GEMINI_2_5_FLASH",
+            _ => "MODEL_PLACEHOLDER_M318",
+        },
+        _ => "MODEL_PLACEHOLDER_M318",
+    }
+}
+
+/// Discovers an active Antigravity Language Server session:
+/// 1. Environment variables (`AGY_LS_PORT`, `JETSKI_LS_PORT`, `AGY_LS_CSRF`)
+/// 2. Active session file: `~/.gemini/antigravity/active_session.json`
+/// 3. OS process detection and log parsing
+pub fn discover_language_server() -> Option<LanguageServerSession> {
+    // 1. Env vars
+    let env_port = std::env::var("AGY_LS_PORT")
+        .or_else(|_| std::env::var("JETSKI_LS_PORT"))
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok());
+    let env_csrf = std::env::var("AGY_LS_CSRF").ok();
+
+    if let (Some(port), Some(csrf)) = (env_port, env_csrf) {
+        return Some(LanguageServerSession {
+            port,
+            csrf,
+            pid: None,
+        });
+    }
+
+    // 2. ~/.gemini/antigravity/active_session.json
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    if !home.is_empty() {
+        let session_file = PathBuf::from(&home)
+            .join(".gemini")
+            .join("antigravity")
+            .join("active_session.json");
+        if session_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&session_file) {
+                if let Ok(session) = serde_json::from_str::<LanguageServerSession>(&content) {
+                    if session.port > 0 && !session.csrf.is_empty() {
+                        return Some(session);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: Parse logs or process commandline if available
+    discover_from_logs_and_process(&home)
+}
+
+fn discover_from_logs_and_process(home: &str) -> Option<LanguageServerSession> {
+    if home.is_empty() {
+        return None;
+    }
+
+    let mut port = None;
+    let candidates = [
+        PathBuf::from(home).join("AppData").join("Roaming").join("Antigravity").join("logs").join("language_server.log"),
+        PathBuf::from(home).join(".gemini").join("antigravity").join("language_server.log"),
+    ];
+
+    for log_path in &candidates {
+        if log_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(log_path) {
+                let re = regex::Regex::new(r"listening on (?:\w+ )?port at (\d+) for HTTP\b").ok()?;
+                for line in content.lines() {
+                    if let Some(caps) = re.captures(line) {
+                        if let Some(p) = caps.get(1).and_then(|m| m.as_str().parse::<u16>().ok()) {
+                            port = Some(p);
+                        }
+                    }
+                }
+            }
+        }
+        if port.is_some() {
+            break;
+        }
+    }
+
+    let resolved_port = port?;
+
+    // Attempt to extract csrf from running process
+    let csrf = extract_csrf_from_process()?;
+
+    Some(LanguageServerSession {
+        port: resolved_port,
+        csrf,
+        pid: None,
+    })
+}
+
+#[cfg(windows)]
+fn extract_csrf_from_process() -> Option<String> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name like 'language_server%'\" | Select-Object -ExpandProperty CommandLine",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let re = regex::Regex::new(r"--csrf_token\s+([a-f0-9\-]+)").ok()?;
+    re.captures(&text).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
+}
+
+#[cfg(not(windows))]
+fn extract_csrf_from_process() -> Option<String> {
+    let re = regex::Regex::new(r"--csrf_token[\x00\s]+([a-f0-9\-]+)").ok()?;
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let path = entry.path().join("cmdline");
+            if path.exists() {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    let text = String::from_utf8_lossy(&bytes);
+                    if text.contains("language_server") && text.contains("--csrf_token") {
+                        if let Some(caps) = re.captures(&text) {
+                            if let Some(c) = caps.get(1) {
+                                return Some(c.as_str().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// External Gemini Fallback Request Structs
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 struct GeminiGenerateContentRequest<'a> {
@@ -95,17 +265,25 @@ pub struct GeminiErrorPayload {
     pub status: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Primary Antigravity Client
+// ---------------------------------------------------------------------------
+
 #[derive(Clone, Debug)]
-pub struct GeminiClient {
+pub struct AntigravityClient {
     client: reqwest::Client,
-    model: String,
-    auth_token: Option<String>,
-    api_key: Option<String>,
-    endpoint_base: String,
+    pub model: String,
+    pub auth_token: Option<String>,
+    pub api_key: Option<String>,
+    pub endpoint_base: String,
+    pub ls_session: Option<LanguageServerSession>,
 }
 
-impl GeminiClient {
-    /// Create a new GeminiClient with optional model and token or API key.
+/// Backwards compatible alias for existing imports
+pub type GeminiClient = AntigravityClient;
+
+impl AntigravityClient {
+    /// Create a new AntigravityClient with optional model and token or API key.
     pub fn new(model: Option<String>, token_or_key: Option<String>) -> Self {
         let clean_model = model
             .filter(|m| !m.trim().is_empty())
@@ -123,7 +301,7 @@ impl GeminiClient {
             }
         }
 
-        // If no token or key provided directly, check environment variables
+        // Check environment variables if neither token nor key was provided
         if auth_token.is_none() && api_key.is_none() {
             if let Ok(key) = std::env::var("GEMINI_API_KEY")
                 .or_else(|_| std::env::var("AGY_API_KEY"))
@@ -140,12 +318,18 @@ impl GeminiClient {
             }
         }
 
+        let ls_session = discover_language_server();
+
         Self {
-            client: reqwest::Client::builder().build().unwrap_or_default(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
             model: clean_model,
             auth_token,
             api_key,
             endpoint_base: DEFAULT_ENDPOINT_BASE.to_string(),
+            ls_session,
         }
     }
 
@@ -161,6 +345,20 @@ impl GeminiClient {
         let token = token_res.ok();
 
         Self::new(model, token)
+    }
+
+    pub fn without_language_server(mut self) -> Self {
+        self.ls_session = None;
+        self
+    }
+
+    pub fn with_language_server(mut self, port: u16, csrf: String) -> Self {
+        self.ls_session = Some(LanguageServerSession {
+            port,
+            csrf,
+            pid: None,
+        });
+        self
     }
 
     pub fn with_model(mut self, model: String) -> Self {
@@ -182,13 +380,235 @@ impl GeminiClient {
     }
 
     pub fn is_authenticated(&self) -> bool {
-        self.auth_token.is_some() || self.api_key.is_some()
+        self.ls_session.is_some() || self.auth_token.is_some() || self.api_key.is_some()
     }
 
-    /// Perform streaming generation via Gemini SSE endpoint.
-    /// Calls `on_chunk` callback for each text delta as it arrives.
-    /// Returns the complete accumulated response text.
+    /// Perform streaming generation.
+    /// If an active Antigravity Language Server session is detected, routes directly
+    /// through the native Antigravity Cascade Agent API.
+    /// If an external AI Studio API key is provided and LS is unavailable, falls back
+    /// to Google Gemini AI Studio SSE endpoint.
     pub async fn stream_generate<F>(
+        &self,
+        prompt: &str,
+        history: &[ChatMessage],
+        system_prompt: Option<&str>,
+        on_chunk: F,
+    ) -> Result<String, ApiError>
+    where
+        F: FnMut(&str) + Send,
+    {
+        // 1. If custom endpoint_base is explicitly configured (e.g. test mock server or proxy), use fallback endpoint
+        if self.endpoint_base != DEFAULT_ENDPOINT_BASE {
+            return self
+                .stream_generate_gemini_fallback(prompt, history, system_prompt, on_chunk)
+                .await;
+        }
+
+        // 2. Native Antigravity Language Server Path
+        if let Some(ref ls) = self.ls_session {
+            return self
+                .stream_generate_language_server(ls, prompt, history, system_prompt, on_chunk)
+                .await;
+        }
+
+        // 3. Fallback: External Google Gemini AI Studio SSE endpoint
+        self.stream_generate_gemini_fallback(prompt, history, system_prompt, on_chunk)
+            .await
+    }
+
+    /// Native Antigravity Cascade Protocol implementation over local Language Server Connect/HTTP RPC.
+    async fn stream_generate_language_server<F>(
+        &self,
+        ls: &LanguageServerSession,
+        prompt: &str,
+        history: &[ChatMessage],
+        system_prompt: Option<&str>,
+        mut on_chunk: F,
+    ) -> Result<String, ApiError>
+    where
+        F: FnMut(&str) + Send,
+    {
+        let mapped_model = map_to_antigravity_model(&self.model);
+
+        // Step 1: Start Cascade
+        let start_url = format!(
+            "http://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/StartCascade",
+            ls.port
+        );
+        let start_body = serde_json::json!({
+            "source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT",
+            "metadata": {
+                "ideName": "antigravity",
+                "ideVersion": "2.28.2"
+            }
+        });
+
+        let start_resp = self
+            .client
+            .post(&start_url)
+            .header("Content-Type", "application/json")
+            .header("x-codeium-csrf-token", &ls.csrf)
+            .json(&start_body)
+            .send()
+            .await?;
+
+        if !start_resp.status().is_success() {
+            let err_txt = start_resp.text().await.unwrap_or_default();
+            return Err(ApiError::LanguageServer(format!(
+                "Failed to initialize Antigravity Cascade session: {}",
+                err_txt
+            )));
+        }
+
+        let start_json: serde_json::Value = start_resp.json().await?;
+        let cascade_id = start_json
+            .get("cascadeId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ApiError::LanguageServer("StartCascade did not return a valid cascadeId".to_string())
+            })?;
+
+        // Step 2: Compose Message Prompt (including system directives and history if provided)
+        let mut final_text = String::new();
+        if let Some(sys) = system_prompt.filter(|s| !s.trim().is_empty()) {
+            final_text.push_str(&format!("[System Directives]\n{}\n\n", sys.trim()));
+        }
+
+        for msg in history {
+            let role_label = match msg.role.as_str() {
+                "model" | "assistant" => "Antigravity",
+                _ => "User",
+            };
+            final_text.push_str(&format!("[{}]\n{}\n\n", role_label, msg.content.trim()));
+        }
+
+        final_text.push_str(prompt);
+
+        // Step 3: Send User Message
+        let send_url = format!(
+            "http://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage",
+            ls.port
+        );
+        let send_body = serde_json::json!({
+            "cascadeId": cascade_id,
+            "items": [
+                { "text": final_text }
+            ],
+            "cascadeConfig": {
+                "plannerConfig": {
+                    "planModel": mapped_model,
+                    "useAiCredits": true
+                }
+            }
+        });
+
+        let send_resp = self
+            .client
+            .post(&send_url)
+            .header("Content-Type", "application/json")
+            .header("x-codeium-csrf-token", &ls.csrf)
+            .json(&send_body)
+            .send()
+            .await?;
+
+        if !send_resp.status().is_success() {
+            let err_txt = send_resp.text().await.unwrap_or_default();
+            return Err(ApiError::LanguageServer(format!(
+                "Failed to deliver prompt to Antigravity Language Server: {}",
+                err_txt
+            )));
+        }
+
+        // Step 4: Poll trajectory steps for streaming response
+        let steps_url = format!(
+            "http://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/GetCascadeTrajectorySteps",
+            ls.port
+        );
+        let query_body = serde_json::json!({ "cascadeId": cascade_id });
+
+        let mut seen_len = 0;
+        let mut full_accumulated = String::new();
+        let timeout = Duration::from_secs(180);
+        let start_time = std::time::Instant::now();
+
+        loop {
+            if start_time.elapsed() > timeout {
+                return Err(ApiError::Stream("Antigravity response timed out after 180s".to_string()));
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let steps_resp = self
+                .client
+                .post(&steps_url)
+                .header("Content-Type", "application/json")
+                .header("x-codeium-csrf-token", &ls.csrf)
+                .json(&query_body)
+                .send()
+                .await?;
+
+            if !steps_resp.status().is_success() {
+                continue;
+            }
+
+            let steps_json: serde_json::Value = steps_resp.json().await?;
+            let steps = steps_json
+                .get("steps")
+                .and_then(|s| s.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let mut is_done = false;
+
+            for step in &steps {
+                let step_type = step.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+
+                if step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE" {
+                    let err_obj = step.get("errorMessage").and_then(|e| e.get("error"));
+                    let msg = err_obj
+                        .and_then(|e| e.get("shortError").or_else(|| e.get("userErrorMessage")))
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Antigravity Agent error occurred");
+                    return Err(ApiError::Api {
+                        code: Some(500),
+                        message: msg.to_string(),
+                        status: Some("ANTIGRAVITY_AGENT_ERROR".to_string()),
+                    });
+                }
+
+                if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE" {
+                    let pr = step.get("plannerResponse");
+                    let resp_str = pr
+                        .and_then(|p| p.get("response").or_else(|| p.get("modifiedResponse")))
+                        .and_then(|r| r.as_str())
+                        .unwrap_or_default();
+
+                    if resp_str.len() > seen_len {
+                        let delta = &resp_str[seen_len..];
+                        on_chunk(delta);
+                        seen_len = resp_str.len();
+                        full_accumulated = resp_str.to_string();
+                    }
+
+                    let status = step.get("status").and_then(|s| s.as_str()).unwrap_or_default();
+                    if status == "CORTEX_STEP_STATUS_DONE" {
+                        is_done = true;
+                        break;
+                    }
+                }
+            }
+
+            if is_done {
+                break;
+            }
+        }
+
+        Ok(full_accumulated)
+    }
+
+    /// Legacy / Fallback streaming generation via Gemini SSE endpoint.
+    async fn stream_generate_gemini_fallback<F>(
         &self,
         prompt: &str,
         history: &[ChatMessage],
@@ -200,7 +620,7 @@ impl GeminiClient {
     {
         if !self.is_authenticated() {
             return Err(ApiError::Auth(
-                "No Gemini API key or Bearer token available. Run 'agy account add' to configure an account, or set GEMINI_API_KEY environment variable.".to_string(),
+                "No Antigravity Language Server running and no Gemini API key available. Start Antigravity IDE/CLI or set GEMINI_API_KEY.".to_string(),
             ));
         }
 
@@ -387,8 +807,8 @@ mod tests {
 
     #[test]
     fn test_client_creation_defaults() {
-        let client = GeminiClient::new(None, Some("test-token".to_string()));
-        assert_eq!(client.model(), "gemini-2.0-flash");
+        let client = AntigravityClient::new(None, Some("test-token".to_string()));
+        assert_eq!(client.model(), DEFAULT_MODEL);
         assert_eq!(client.endpoint_base(), DEFAULT_ENDPOINT_BASE);
         assert!(client.is_authenticated());
         assert_eq!(client.auth_token, Some("test-token".to_string()));
@@ -397,13 +817,28 @@ mod tests {
 
     #[test]
     fn test_api_key_detection() {
-        let client = GeminiClient::new(
+        let client = AntigravityClient::new(
             Some("gemini-1.5-pro".to_string()),
             Some("AIzaSyDummyKey123".to_string()),
         );
         assert_eq!(client.model(), "gemini-1.5-pro");
         assert!(client.auth_token.is_none());
         assert_eq!(client.api_key, Some("AIzaSyDummyKey123".to_string()));
+    }
+
+    #[test]
+    fn test_antigravity_model_mapping() {
+        assert_eq!(map_to_antigravity_model("gemini-3.8-flash-high"), "MODEL_PLACEHOLDER_M318");
+        assert_eq!(map_to_antigravity_model("flash"), "MODEL_PLACEHOLDER_M318");
+        assert_eq!(map_to_antigravity_model("fast"), "MODEL_PLACEHOLDER_M318");
+        assert_eq!(map_to_antigravity_model("gemini-2.5-pro"), "MODEL_GOOGLE_GEMINI_2_5_PRO");
+        assert_eq!(map_to_antigravity_model("pro"), "MODEL_GOOGLE_GEMINI_2_5_PRO");
+        assert_eq!(map_to_antigravity_model("claude-sonnet-4-6"), "MODEL_PLACEHOLDER_M35");
+        assert_eq!(map_to_antigravity_model("sonnet"), "MODEL_PLACEHOLDER_M35");
+        assert_eq!(map_to_antigravity_model("claude-opus-4-6-thinking"), "MODEL_PLACEHOLDER_M26");
+        assert_eq!(map_to_antigravity_model("opus"), "MODEL_PLACEHOLDER_M26");
+        assert_eq!(map_to_antigravity_model("gemini-2.5-flash"), "MODEL_GOOGLE_GEMINI_2_5_FLASH");
+        assert_eq!(map_to_antigravity_model("unknown-custom"), "MODEL_PLACEHOLDER_M318");
     }
 
     #[test]
@@ -431,7 +866,7 @@ mod tests {
 
                 let sse_body = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello \"}]}}]}\n\n\
                                 data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"from \"}]}}]}\n\n\
-                                data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Gemini!\"}]}}]}\n\n\
+                                data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Antigravity!\"}]}}]}\n\n\
                                 data: [DONE]\n\n";
 
                 let resp = format!(
@@ -446,11 +881,13 @@ mod tests {
             }
         });
 
-        let client = GeminiClient::new(
+        let mut client = AntigravityClient::new(
             Some("gemini-2.0-flash".to_string()),
             Some("test-token".to_string()),
         )
         .with_endpoint_base(format!("http://{}", local_addr));
+        // Force fallback to test the SSE mock listener
+        client.ls_session = None;
 
         let mut received = Vec::new();
         let full = client
@@ -460,7 +897,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(full, "Hello from Gemini!");
-        assert_eq!(received, vec!["Hello ", "from ", "Gemini!"]);
+        assert_eq!(full, "Hello from Antigravity!");
+        assert_eq!(received, vec!["Hello ", "from ", "Antigravity!"]);
     }
 }

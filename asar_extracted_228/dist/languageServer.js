@@ -315,6 +315,16 @@ function startLanguageServer(port, csrf, options = {}) {
                     clearTimeout(timer);
                     const actualPort = parseInt(m[1], 10);
                     _lsPort = actualPort;
+                    try {
+                        const sessionDir = path_1.default.join(require('os').homedir(), '.gemini', 'antigravity');
+                        if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+                        fs.writeFileSync(path_1.default.join(sessionDir, 'active_session.json'), JSON.stringify({
+                            port: actualPort,
+                            csrf: csrf,
+                            pid: _lsProcess ? _lsProcess.pid : process.pid,
+                            updatedAt: new Date().toISOString()
+                        }, null, 2), 'utf-8');
+                    } catch (_) {}
                     resolve({
                         port: actualPort,
                         process: _lsProcess,

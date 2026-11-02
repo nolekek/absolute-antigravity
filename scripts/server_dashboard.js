@@ -1299,7 +1299,7 @@ class ServerDashboard {
 
                     const slot = data.slot || null;
                     const preset = data.preset || getActivePreset(this.workspace);
-                    const model = data.model || "gemini-2.0-flash";
+                    const model = data.model || "gemini-3.8-flash-high";
                     const ws = data.workspace ? path.resolve(data.workspace) : this.workspace;
 
                     res.writeHead(200, {
@@ -2677,7 +2677,7 @@ class ServerDashboard {
     <div class="chat-container" id="chatBox">
       <div class="chat-msg assistant">
         <div class="chat-msg-header">
-          <span class="chat-avatar assistant">✨ Gemini</span>
+          <span class="chat-avatar assistant">✨ Antigravity</span>
           <span class="chat-msg-time">Ready</span>
         </div>
         <div class="chat-msg-body">
@@ -2697,9 +2697,11 @@ class ServerDashboard {
       <div class="chat-bar-meta">
         <div class="chat-meta-left">
           <select class="chat-model-select" id="chatModel">
-            <option value="gemini-2.0-flash">⚡ gemini-2.0-flash (Fast)</option>
-            <option value="gemini-2.5-pro">🧠 gemini-2.5-pro (Deep)</option>
-            <option value="gemini-2.0-flash-thinking-exp">🔬 flash-thinking (CoT)</option>
+            <option value="gemini-3.8-flash-high">⚡ Gemini 3.8 Flash High (Default)</option>
+            <option value="gemini-2.5-pro">🧠 Gemini 2.5 Pro (Deep)</option>
+            <option value="claude-sonnet-4-6">🎭 Claude Sonnet 4.6 (Thinking)</option>
+            <option value="claude-opus-4-6-thinking">👑 Claude Opus 4.6 (Thinking)</option>
+            <option value="gemini-2.5-flash">🚀 Gemini 2.5 Flash Lite</option>
           </select>
           <div class="chat-preset-tag">
             <span>🎭</span> <span id="chatPresetIndicator">orchestrator</span>
@@ -2709,7 +2711,7 @@ class ServerDashboard {
         <button class="btn btn-ghost" style="padding:2px 8px; font-size:11px;" onclick="clearChat()">🗑️ Очистить</button>
       </div>
       <div class="chat-bar">
-        <textarea class="chat-textarea" id="chatInput" placeholder="Введите задачу для Gemini (Enter - отправить, Shift+Enter - строка)..." onkeydown="handleChatKey(event)"></textarea>
+        <textarea class="chat-textarea" id="chatInput" placeholder="Введите задачу для Antigravity (Enter - отправить, Shift+Enter - строка)..." onkeydown="handleChatKey(event)"></textarea>
         <button class="btn btn-primary chat-action-btn" id="chatSendBtn" onclick="sendChatMessage()" title="Отправить сообщение">➤</button>
         <button class="btn btn-danger chat-action-btn" id="chatStopBtn" style="display:none;" onclick="stopChatStream()" title="Остановить генерацию">⏹</button>
       </div>
@@ -3361,7 +3363,7 @@ class ServerDashboard {
       document.getElementById("chatBox").innerHTML = \`
         <div class="chat-msg assistant">
           <div class="chat-msg-header">
-            <span class="chat-avatar assistant">✨ Gemini</span>
+            <span class="chat-avatar assistant">✨ Antigravity</span>
             <span class="chat-msg-time">Ready</span>
           </div>
           <div class="chat-msg-body">
@@ -3384,7 +3386,7 @@ class ServerDashboard {
       sendBtn.style.display = "none";
       stopBtn.style.display = "flex";
 
-      const assistantMsg = appendChatMessage("assistant", "⏳ Подключение к Gemini на сервере...");
+      const assistantMsg = appendChatMessage("assistant", "⏳ Подключение к Antigravity на сервере...");
       let accumulated = "";
 
       chatAbortController = new AbortController();

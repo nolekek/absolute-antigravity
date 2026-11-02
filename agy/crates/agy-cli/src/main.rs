@@ -8,7 +8,7 @@ use agy_core::ipc::{IpcRequest, IpcResponse};
 use agy_core::presets::PresetManager;
 use agy_core::symlink::SymlinkEngine;
 use agy_core::{
-    build_preset_system_prompt, resolve_preset, ChatMessage, GeminiClient, DEFAULT_MODEL,
+    build_preset_system_prompt, resolve_preset, AntigravityClient, ChatMessage, DEFAULT_MODEL,
 };
 
 #[derive(Parser)]
@@ -1438,7 +1438,7 @@ async fn execute_chat(
         std::env::var("AGY_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
     });
 
-    let mut client = GeminiClient::from_slot(Some(current_slot), Some(current_model.clone()));
+    let mut client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
 
     let skills_count = resolved_preset.as_ref().map(|r| r.total_skills).unwrap_or(0);
 
@@ -1536,7 +1536,7 @@ async fn execute_chat(
                         println!("{} Укажите номер слота, например: /slot 2", "❌ Ошибка:".red().bold());
                     } else if let Ok(s) = parts[1].parse::<u32>() {
                         current_slot = s;
-                        client = GeminiClient::from_slot(Some(current_slot), Some(current_model.clone()));
+                        client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
                         email = cred_mgr
                             .get_status()
                             .ok()
@@ -1564,8 +1564,8 @@ async fn execute_chat(
             continue;
         }
 
-        // Gemini Streaming Generation
-        print!("\n{} ", "🤖 Gemini >".cyan().bold());
+        // Antigravity Native Streaming Generation
+        print!("\n{} ", "🤖 Antigravity >".cyan().bold());
         let _ = io::stdout().flush();
 
         let stream_res = client
@@ -1594,7 +1594,7 @@ async fn execute_chat(
                 });
             }
             Err(e) => {
-                eprintln!("{} {}", "❌ Ошибка Gemini API:".red().bold(), e);
+                eprintln!("{} {}", "❌ Ошибка Antigravity API:".red().bold(), e);
             }
         }
     }
@@ -1623,7 +1623,13 @@ async fn execute_exec(
     let mut stdin_content = String::new();
     let is_piped = !io::stdin().is_terminal();
     if is_piped {
-        let _ = io::stdin().read_to_string(&mut stdin_content);
+        if prompt.is_none() {
+            // When no explicit prompt is given, stdin is mandatory (e.g. cat file | agy exec)
+            let _ = io::stdin().read_to_string(&mut stdin_content);
+        } else if agy_core::has_stdin_data() {
+            // When prompt is given, only read stdin if piped data is actively available
+            let _ = io::stdin().read_to_string(&mut stdin_content);
+        }
     }
 
     let final_prompt = match format_exec_prompt(prompt.as_deref(), &stdin_content) {
@@ -1661,7 +1667,7 @@ async fn execute_exec(
         std::env::var("AGY_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
     });
 
-    let client = GeminiClient::from_slot(Some(resolved_slot), Some(target_model));
+    let client = AntigravityClient::from_slot(Some(resolved_slot), Some(target_model));
 
     client
         .stream_generate(
@@ -1674,7 +1680,7 @@ async fn execute_exec(
             },
         )
         .await
-        .map_err(|e| anyhow::anyhow!("Gemini API error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Antigravity API error: {}", e))?;
 
     println!();
     Ok(())
