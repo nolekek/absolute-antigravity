@@ -1,10 +1,26 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.multiaccManager = void 0;
+exports.findAgyBinary = void 0;
 
 const path = require("path");
 const { execFile } = require("child_process");
-const { BrowserWindow, Notification } = require("electron");
+
+let BrowserWindow, Notification, app;
+try {
+    const electron = require("electron");
+    BrowserWindow = electron.BrowserWindow;
+    Notification = electron.Notification;
+    app = electron.app;
+} catch (_) {
+    BrowserWindow = class MockBrowserWindow {
+        static getAllWindows() { return []; }
+    };
+    Notification = class MockNotification {
+        show() {}
+    };
+    app = null;
+}
 
 const fs = require("fs");
 const os = require("os");
@@ -23,12 +39,76 @@ if (SCRIPT_PATH.includes("app.asar")) {
     }
 }
 
+/**
+ * Finds the agy or agy-daemon binary across packaged distro, unpacked asar, and system PATH.
+ * 1. Checks process.resourcesPath/bin/agy.exe (or agy on Linux)
+ * 2. Checks path.join(__dirname, '..', '..', 'app.asar.unpacked', 'bin', 'agy.exe')
+ * 3. Checks system PATH
+ */
+function findAgyBinary(binName = "agy") {
+    const isWin = process.platform === "win32";
+    const targetName = isWin
+        ? (binName.toLowerCase().endsWith(".exe") ? binName : `${binName}.exe`)
+        : binName.replace(/\.exe$/i, "");
+
+    // 1. process.resourcesPath/bin/agy.exe (distro embedded binary)
+    if (process.resourcesPath) {
+        const p1 = path.join(process.resourcesPath, "bin", targetName);
+        if (fs.existsSync(p1)) {
+            return p1;
+        }
+    }
+
+    // 2. path.join(__dirname, '..', '..', 'app.asar.unpacked', 'bin', 'agy.exe')
+    const unpackedCandidates = [
+        path.join(__dirname, "..", "..", "app.asar.unpacked", "bin", targetName),
+        path.join(__dirname, "..", "app.asar.unpacked", "bin", targetName),
+        path.join(__dirname, "app.asar.unpacked", "bin", targetName),
+        path.join(__dirname, "binaries", isWin ? "windows-x64" : "linux-x64", targetName),
+        path.join(__dirname, "agy", "target", "release", targetName),
+        path.join(USER_HOME, ".gemini", "antigravity", "bin", targetName)
+    ];
+    for (const cand of unpackedCandidates) {
+        if (fs.existsSync(cand)) {
+            return cand;
+        }
+    }
+
+    // 3. System PATH
+    const envPath = process.env.PATH || process.env.Path || "";
+    if (envPath) {
+        const dirs = envPath.split(path.delimiter);
+        for (const dir of dirs) {
+            if (!dir) continue;
+            const candidate = path.join(dir, targetName);
+            if (fs.existsSync(candidate)) {
+                return candidate;
+            }
+        }
+    }
+
+    try {
+        const { execSync } = require("child_process");
+        const cmd = isWin ? `where "${targetName}"` : `which "${targetName}"`;
+        const out = execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+        if (out) {
+            const first = out.split(/\r?\n/)[0].trim();
+            if (first && fs.existsSync(first)) {
+                return first;
+            }
+        }
+    } catch (_) {}
+
+    return null;
+}
+
 class MultiaccManager {
     constructor() {
         this.lastFailoverTime = 0;
         this.isAddingAccount = false;
         this.restartLsCallback = null;
         this.botProcess = null;
+        this.daemonProcess = null;
         this.httpBridgeServer = null;
         this.webDashboard = null;
         this.startCommandWatcher();
@@ -36,6 +116,116 @@ class MultiaccManager {
         this.startBotWatcher();
         this.autoStartBotIfEnabled();
         this.startWebDashboard();
+        this.initAgyLifecycle();
+    }
+
+    initAgyLifecycle() {
+        if (app && typeof app.on === "function") {
+            app.on("before-quit", () => {
+                this.stopAgyDaemon();
+            });
+        }
+        try {
+            process.on("exit", () => {
+                this.stopAgyDaemon();
+            });
+        } catch (_) {}
+        this.autoStartAgyDaemon();
+    }
+
+    findAgyBinary(binName = "agy") {
+        return findAgyBinary(binName);
+    }
+
+    async isDaemonRunning(socketPath = null) {
+        return new Promise((resolve) => {
+            const net = require("net");
+            const defaultPipe = process.platform === "win32"
+                ? "\\\\.\\pipe\\antigravity-ipc"
+                : (process.env.XDG_RUNTIME_DIR ? path.join(process.env.XDG_RUNTIME_DIR, "agy.sock") : "/tmp/antigravity-ipc.sock");
+            const pipe = socketPath || process.env.AGY_SOCKET || defaultPipe;
+
+            let client = null;
+            let finished = false;
+            const finish = (val) => {
+                if (finished) return;
+                finished = true;
+                if (client) {
+                    try { client.destroy(); } catch (_) {}
+                }
+                resolve(val);
+            };
+
+            const timer = setTimeout(() => {
+                finish(false);
+            }, 600);
+
+            try {
+                client = net.connect(pipe, () => {
+                    clearTimeout(timer);
+                    finish(true);
+                });
+                client.on("error", () => {
+                    clearTimeout(timer);
+                    finish(false);
+                });
+            } catch (_) {
+                clearTimeout(timer);
+                finish(false);
+            }
+        });
+    }
+
+    async ensureAgyDaemon() {
+        const running = await this.isDaemonRunning();
+        if (running) {
+            console.log("[MultiAcc] agy-daemon is already running.");
+            return true;
+        }
+
+        const daemonBin = this.findAgyBinary("agy-daemon");
+        if (!daemonBin) {
+            console.warn("[MultiAcc] agy-daemon binary not found; auto-start skipped.");
+            return false;
+        }
+
+        try {
+            const { spawn } = require("child_process");
+            const proc = spawn(daemonBin, [], {
+                detached: true,
+                stdio: "ignore",
+                windowsHide: true
+            });
+            proc.unref();
+            this.daemonProcess = proc;
+            proc.on("exit", (code) => {
+                console.log("[MultiAcc] agy-daemon process exited with code:", code);
+                this.daemonProcess = null;
+            });
+            console.log("[MultiAcc] Spawned embedded agy-daemon from:", daemonBin);
+            return true;
+        } catch (err) {
+            console.error("[MultiAcc] Failed to spawn agy-daemon:", err);
+            return false;
+        }
+    }
+
+    stopAgyDaemon() {
+        if (this.daemonProcess) {
+            console.log("[MultiAcc] Stopping embedded agy-daemon child process...");
+            try {
+                this.daemonProcess.kill();
+            } catch (_) {}
+            this.daemonProcess = null;
+        }
+    }
+
+    autoStartAgyDaemon() {
+        const isTest = process.env.NODE_ENV === "test" || process.argv.some(a => a.includes("test"));
+        if (isTest) return;
+        this.ensureAgyDaemon().catch(err => {
+            console.error("[MultiAcc] Auto-start daemon error:", err);
+        });
     }
 
     startHttpServer() {
@@ -1134,3 +1324,4 @@ class MultiaccManager {
 }
 
 exports.multiaccManager = new MultiaccManager();
+exports.findAgyBinary = findAgyBinary;

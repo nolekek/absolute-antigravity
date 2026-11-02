@@ -134,7 +134,7 @@ def sync_skills():
 def repack_asar():
     """Packs asar_extracted_228 with unpack rules, deploys to installation, updates payload."""
     log_info("Packing app.asar with native unpack rules...")
-    cmd = f'npx asar pack "{ASAR_SRC}" "{ASAR_OUT}" --unpack "{{**/chrome-devtools-mcp/**,**/credHelper.py}}"'
+    cmd = f'npx asar pack "{ASAR_SRC}" "{ASAR_OUT}" --unpack "{{**/chrome-devtools-mcp/**,**/credHelper.py,**/bin/**}}"'
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORKSPACE_ROOT)
     if res.returncode != 0:
         log_error(f"ASAR pack failed: {res.stderr.strip()}")
@@ -142,6 +142,18 @@ def repack_asar():
     asar_size = os.path.getsize(ASAR_OUT)
     log_success(f"Packed app.asar.patched_master successfully ({asar_size} bytes).")
     
+    # Also copy to root app.asar
+    root_asar = os.path.join(WORKSPACE_ROOT, "app.asar")
+    shutil.copy2(ASAR_OUT, root_asar)
+
+    # Sync app.asar.unpacked/bin with binaries
+    app_unpacked_bin = os.path.join(WORKSPACE_ROOT, "app.asar.unpacked", "bin")
+    os.makedirs(app_unpacked_bin, exist_ok=True)
+    for b in ["agy.exe", "agy-daemon.exe", "agy", "agy-daemon"]:
+        src_b = os.path.join(WORKSPACE_ROOT, "binaries", "windows-x64" if b.endswith(".exe") else "linux-x64", b)
+        if os.path.exists(src_b):
+            shutil.copy2(src_b, os.path.join(app_unpacked_bin, b))
+
     # Deploy to live Antigravity installation
     if os.path.exists(LOCAL_APP_DIR):
         try:
@@ -158,6 +170,19 @@ def repack_asar():
             shutil.copyfileobj(f_in, f_out)
     gz_size = os.path.getsize(PAYLOAD_ASAR_GZ)
     log_success(f"Compressed app.asar.gz ({gz_size} bytes).")
+
+    # Sync payload binaries and schemas
+    for b in ["agy.exe", "agy-daemon.exe"]:
+        src_b = os.path.join(WORKSPACE_ROOT, "binaries", "windows-x64", b)
+        if os.path.exists(src_b):
+            shutil.copy2(src_b, os.path.join(PAYLOAD_DIR, b))
+    
+    schemas_src = os.path.join(WORKSPACE_ROOT, "schemas")
+    if os.path.exists(schemas_src):
+        schemas_dst = os.path.join(PAYLOAD_DIR, "schemas")
+        os.makedirs(schemas_dst, exist_ok=True)
+        for item in os.listdir(schemas_src):
+            shutil.copy2(os.path.join(schemas_src, item), os.path.join(schemas_dst, item))
     return True
 
 def run_tests():

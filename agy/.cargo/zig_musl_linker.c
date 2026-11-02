@@ -14,7 +14,35 @@ int main() {
         while (*p && *p != ' ') p++;
     }
     while (*p == ' ') p++;
-    strcat(cmd, p);
+
+    char processed[65536] = {0};
+    int dst_idx = 0;
+    const char* n1 = "--target=x86_64-unknown-linux-musl";
+    int n1_len = (int)strlen(n1);
+    const char* r1 = "--target=x86_64-linux-musl";
+    int r1_len = (int)strlen(r1);
+
+    const char* n2 = "-target x86_64-unknown-linux-musl";
+    int n2_len = (int)strlen(n2);
+    const char* r2 = "-target x86_64-linux-musl";
+    int r2_len = (int)strlen(r2);
+
+    while (*p) {
+        if (strncmp(p, n1, n1_len) == 0) {
+            memcpy(&processed[dst_idx], r1, r1_len);
+            dst_idx += r1_len;
+            p += n1_len;
+        } else if (strncmp(p, n2, n2_len) == 0) {
+            memcpy(&processed[dst_idx], r2, r2_len);
+            dst_idx += r2_len;
+            p += n2_len;
+        } else {
+            processed[dst_idx++] = *p++;
+        }
+    }
+    processed[dst_idx] = '\0';
+
+    strcat(cmd, processed);
 
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;

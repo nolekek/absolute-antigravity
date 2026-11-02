@@ -20,6 +20,14 @@ import importlib.util
 from datetime import datetime
 
 IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 class Colors:
     GREEN = "\033[92m" if not IS_WINDOWS or "WT_SESSION" in os.environ else ""
@@ -31,13 +39,16 @@ class Colors:
     RESET = "\033[0m" if not IS_WINDOWS or "WT_SESSION" in os.environ else ""
 
 def print_banner():
-    banner = f"""{Colors.CYAN}{Colors.BOLD}
+    try:
+        banner = f"""{Colors.CYAN}{Colors.BOLD}
   ╔═══════════════════════════════════════════════════════════════════╗
   ║              ANTIGRAVITY SUPERCHARGED INSTALLER 🚀                ║
   ║  Multi-Account · 16 Presets · 101 Skills · Rust CLI (agy) · Bypass║
   ╚═══════════════════════════════════════════════════════════════════╝{Colors.RESET}
 """
-    print(banner)
+        print(banner)
+    except Exception:
+        print("\n=== ANTIGRAVITY SUPERCHARGED INSTALLER (STANDALONE & TWEAKS) ===\n")
 
 def get_payload_dir():
     if getattr(sys, 'frozen', False):
@@ -253,7 +264,28 @@ def install_tweaks(custom_path=None):
     cred_src = os.path.join(payload_dir, "credHelper.py")
     if os.path.exists(cred_src):
         shutil.copy2(cred_src, os.path.join(paths['unpacked_dist'], "credHelper.py"))
+        shutil.copy2(cred_src, os.path.join(paths['unpacked_dir'], "credHelper.py"))
         print(f"  {Colors.GREEN}✔ credHelper.py распакован в app.asar.unpacked/dist{Colors.RESET}")
+
+    # Ensure resources/bin and app.asar.unpacked/bin embedded binaries
+    resources_bin = os.path.join(paths['resources_dir'], "bin")
+    unpacked_bin = os.path.join(paths['unpacked_dir'], "bin")
+    os.makedirs(resources_bin, exist_ok=True)
+    os.makedirs(unpacked_bin, exist_ok=True)
+
+    bin_executables = ["agy.exe", "agy-daemon.exe"] if IS_WINDOWS else ["agy", "agy-daemon"]
+    for b in bin_executables:
+        src_b = os.path.join(payload_dir, b)
+        if os.path.exists(src_b):
+            shutil.copy2(src_b, os.path.join(resources_bin, b))
+            shutil.copy2(src_b, os.path.join(unpacked_bin, b))
+            if not IS_WINDOWS:
+                try:
+                    os.chmod(os.path.join(resources_bin, b), 0o755)
+                    os.chmod(os.path.join(unpacked_bin, b), 0o755)
+                except Exception:
+                    pass
+    print(f"  {Colors.GREEN}✔ Встроенные бинарники Rust ядра развернуты в resources/bin/ и app.asar.unpacked/bin/{Colors.RESET}")
 
     # Ensure ~/.gemini/antigravity/bin structure
     os.makedirs(paths['gemini_bin'], exist_ok=True)
@@ -287,7 +319,20 @@ def install_tweaks(custom_path=None):
         os.makedirs(paths['gemini_config'], exist_ok=True)
         shutil.copy2(presets_src, os.path.join(paths['gemini_config'], "presets.yaml"))
         shutil.copy2(presets_src, os.path.join(paths['gemini_bin'], "presets.yaml"))
-        print(f"  {Colors.GREEN}✔ Конфигурация 16 пресетов (presets.yaml) развернута в ~/.gemini/config/{Colors.RESET}")
+        shutil.copy2(presets_src, os.path.join(paths['resources_dir'], "presets.yaml"))
+        print(f"  {Colors.GREEN}✔ Конфигурация 16 пресетов (presets.yaml) развернута в config/ и resources/{Colors.RESET}")
+
+    # Deploy schemas/ validation
+    schemas_src = os.path.join(payload_dir, "schemas")
+    if os.path.exists(schemas_src):
+        res_schemas = os.path.join(paths['resources_dir'], "schemas")
+        cfg_schemas = os.path.join(paths['gemini_config'], "schemas")
+        os.makedirs(res_schemas, exist_ok=True)
+        os.makedirs(cfg_schemas, exist_ok=True)
+        for item in os.listdir(schemas_src):
+            shutil.copy2(os.path.join(schemas_src, item), os.path.join(res_schemas, item))
+            shutil.copy2(os.path.join(schemas_src, item), os.path.join(cfg_schemas, item))
+        print(f"  {Colors.GREEN}✔ JSON-схемы валидации (schemas/) развернуты в resources/schemas/ и config/schemas/{Colors.RESET}")
 
     # Register ~/.gemini/antigravity/bin in User PATH
     if add_to_user_path(paths['gemini_bin']):
@@ -433,13 +478,219 @@ def install_tweaks(custom_path=None):
   8. 🛡️ {Colors.CYAN}Авто-защита:{Colors.RESET} сторожевой скрипт предотвратит сброс твиков при обновлениях.
 """)
 
+def build_standalone_distro(target_dir=None, source_runtime_dir=None):
+    print_banner()
+    print(f"\n{Colors.BOLD}{Colors.CYAN}=== СБОРКА АВТОНОМНОГО ДИСТРИБУТИВА ANTIGRAVITY ABSOLUTE (STANDALONE) ==={Colors.RESET}\n")
+
+    payload_dir = get_payload_dir()
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+    if not target_dir:
+        target_dir = os.path.join(repo_root, "dist", "AntigravityAbsolute")
+    target_dir = os.path.abspath(target_dir)
+
+    print(f"  {Colors.DIM}Целевая директория дистрибутива:{Colors.RESET} {target_dir}")
+    os.makedirs(target_dir, exist_ok=True)
+
+    # 1. Locate source runtime to copy Electron host files (if available)
+    source_dir = None
+    if source_runtime_dir and os.path.exists(source_runtime_dir):
+        source_dir = os.path.abspath(source_runtime_dir)
+    else:
+        try:
+            cand_paths = locate_antigravity_paths(custom_path=None) if not getattr(sys, 'frozen', False) else None
+            if cand_paths and os.path.exists(cand_paths['program_dir']):
+                source_dir = cand_paths['program_dir']
+        except Exception:
+            pass
+
+    if source_dir and os.path.exists(source_dir):
+        print(f"  {Colors.CYAN}• Копирование рантайма Electron из: {source_dir}...{Colors.RESET}")
+        for item in os.listdir(source_dir):
+            if item.lower() in ["resources", "app.asar", "app.asar.unpacked"]:
+                continue
+            src_item = os.path.join(source_dir, item)
+            dst_item = os.path.join(target_dir, item)
+            try:
+                if os.path.isdir(src_item):
+                    shutil.copytree(src_item, dst_item, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src_item, dst_item)
+            except Exception:
+                pass
+        src_res = os.path.join(source_dir, "resources")
+        if os.path.exists(src_res):
+            dst_res = os.path.join(target_dir, "resources")
+            os.makedirs(dst_res, exist_ok=True)
+            for item in os.listdir(src_res):
+                if item.startswith("app.asar") or item == "bin":
+                    continue
+                si = os.path.join(src_res, item)
+                di = os.path.join(dst_res, item)
+                try:
+                    if os.path.isdir(si):
+                        shutil.copytree(si, di, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(si, di)
+                except Exception:
+                    pass
+        print(f"  {Colors.GREEN}✔ Базовый рантайм Electron скопирован в дистрибутив{Colors.RESET}")
+    else:
+        print(f"  {Colors.YELLOW}[i] Базовый рантайм Electron не найден локально; создаётся автономная портативная структура компонентов.{Colors.RESET}")
+
+    # 2. Setup resources directory structure
+    resources_dir = os.path.join(target_dir, "resources")
+    resources_bin = os.path.join(resources_dir, "bin")
+    unpacked_dir = os.path.join(resources_dir, "app.asar.unpacked")
+    unpacked_dist = os.path.join(unpacked_dir, "dist")
+    unpacked_bin = os.path.join(unpacked_dir, "bin")
+    distro_bin = os.path.join(target_dir, "bin")
+
+    os.makedirs(resources_dir, exist_ok=True)
+    os.makedirs(resources_bin, exist_ok=True)
+    os.makedirs(unpacked_dist, exist_ok=True)
+    os.makedirs(unpacked_bin, exist_ok=True)
+    os.makedirs(distro_bin, exist_ok=True)
+
+    # 3. Deploy Rust CLI binaries (agy, agy-daemon)
+    print(f"  {Colors.CYAN}• Встраивание бинарников agy и agy-daemon в структуру клиента...{Colors.RESET}")
+    bin_names = ["agy.exe", "agy-daemon.exe"] if IS_WINDOWS else ["agy", "agy-daemon"]
+    for b in bin_names:
+        b_src = os.path.join(payload_dir, b)
+        if not os.path.exists(b_src):
+            b_src = os.path.join(repo_root, "binaries", "windows-x64" if IS_WINDOWS else "linux-x64", b)
+        if not os.path.exists(b_src):
+            b_src = os.path.join(repo_root, "agy", "target", "release", b)
+
+        if os.path.exists(b_src):
+            shutil.copy2(b_src, os.path.join(resources_bin, b))
+            shutil.copy2(b_src, os.path.join(unpacked_bin, b))
+            shutil.copy2(b_src, os.path.join(distro_bin, b))
+            if not IS_WINDOWS:
+                try:
+                    os.chmod(os.path.join(resources_bin, b), 0o755)
+                    os.chmod(os.path.join(unpacked_bin, b), 0o755)
+                    os.chmod(os.path.join(distro_bin, b), 0o755)
+                except Exception:
+                    pass
+            print(f"    ✔ {b} встроена в resources/bin, app.asar.unpacked/bin и bin/")
+
+    # 4. Deploy credHelper.py
+    cred_src = os.path.join(payload_dir, "credHelper.py")
+    if not os.path.exists(cred_src):
+        cred_src = os.path.join(repo_root, "credHelper.py")
+    if os.path.exists(cred_src):
+        shutil.copy2(cred_src, os.path.join(unpacked_dir, "credHelper.py"))
+        shutil.copy2(cred_src, os.path.join(unpacked_dist, "credHelper.py"))
+        shutil.copy2(cred_src, os.path.join(distro_bin, "credHelper.py"))
+        print(f"    ✔ credHelper.py развернут в app.asar.unpacked")
+
+    # 5. Deploy presets.yaml and schemas/
+    presets_src = os.path.join(payload_dir, "presets.yaml")
+    if not os.path.exists(presets_src):
+        presets_src = os.path.join(repo_root, "presets.yaml")
+    if os.path.exists(presets_src):
+        shutil.copy2(presets_src, os.path.join(resources_dir, "presets.yaml"))
+        shutil.copy2(presets_src, os.path.join(target_dir, "presets.yaml"))
+        print(f"    ✔ presets.yaml (16 сфокусированных пресетов) скопирован")
+
+    schemas_src = os.path.join(payload_dir, "schemas")
+    if not os.path.exists(schemas_src):
+        schemas_src = os.path.join(repo_root, "schemas")
+    if os.path.exists(schemas_src):
+        res_schemas = os.path.join(resources_dir, "schemas")
+        target_schemas = os.path.join(target_dir, "schemas")
+        os.makedirs(res_schemas, exist_ok=True)
+        os.makedirs(target_schemas, exist_ok=True)
+        for item in os.listdir(schemas_src):
+            shutil.copy2(os.path.join(schemas_src, item), os.path.join(res_schemas, item))
+            shutil.copy2(os.path.join(schemas_src, item), os.path.join(target_schemas, item))
+        print(f"    ✔ schemas/ (JSON-схемы валидации) скопированы")
+
+    # 6. Deploy / pack app.asar
+    target_asar = os.path.join(resources_dir, "app.asar")
+    print(f"  {Colors.CYAN}• Развёртывание модифицированного app.asar...{Colors.RESET}")
+    packed_direct = False
+    asar_extracted = os.path.join(repo_root, "asar_extracted_228")
+    if os.path.exists(asar_extracted) and shutil.which("npx"):
+        try:
+            print(f"    • Упаковка asar напрямую с unpack-правилами...")
+            cmd = f'npx asar pack "{asar_extracted}" "{target_asar}" --unpack "{{**/chrome-devtools-mcp/**,**/credHelper.py,**/bin/**}}"'
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=repo_root)
+            if res.returncode == 0 and os.path.exists(target_asar):
+                packed_direct = True
+                print(f"    ✔ app.asar собран напрямую из исходников с полным набором unpack-правил")
+        except Exception:
+            pass
+
+    if not packed_direct:
+        root_asar = os.path.join(repo_root, "app.asar")
+        asar_gz = os.path.join(payload_dir, "app.asar.gz")
+        if os.path.exists(root_asar):
+            shutil.copy2(root_asar, target_asar)
+            print(f"    ✔ Скопирован готовый app.asar из репозитория")
+        elif os.path.exists(asar_gz):
+            with gzip.open(asar_gz, 'rb') as f_in, open(target_asar, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            print(f"    ✔ app.asar распакован из архива пакета payload")
+
+    # 7. Deploy launch scripts
+    launch_vbs_src = os.path.join(payload_dir, "launch.vbs")
+    if not os.path.exists(launch_vbs_src):
+        launch_vbs_src = os.path.join(repo_root, "scripts", "launch.vbs")
+    if os.path.exists(launch_vbs_src):
+        shutil.copy2(launch_vbs_src, os.path.join(target_dir, "launch.vbs"))
+        shutil.copy2(launch_vbs_src, os.path.join(distro_bin, "launch.vbs"))
+
+    if IS_WINDOWS:
+        bat_launcher = os.path.join(target_dir, "AntigravityAbsolute.bat")
+        with open(bat_launcher, "w", encoding="utf-8") as f:
+            f.write('@echo off\r\nstart "" wscript.exe "%~dp0launch.vbs"\r\n')
+    else:
+        sh_launcher = os.path.join(target_dir, "launch.sh")
+        with open(sh_launcher, "w", encoding="utf-8") as f:
+            f.write('#!/bin/bash\nDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n"$DIR/bin/agy-daemon" &\n"$DIR/antigravity" "$@"\n')
+        try: os.chmod(sh_launcher, 0o755)
+        except Exception: pass
+
+    # 8. Copy skills library and plugins if available
+    skills_src = os.path.join(repo_root, "skills-library")
+    if os.path.exists(skills_src):
+        dst_skills = os.path.join(target_dir, "skills-library")
+        shutil.copytree(skills_src, dst_skills, dirs_exist_ok=True)
+        print(f"    ✔ skills-library (101 навык) скопирована в дистрибутив")
+
+    # Summary
+    print(f"\n{Colors.GREEN}{Colors.BOLD}" + "═" * 70 + f"{Colors.RESET}")
+    print(f"{Colors.GREEN}{Colors.BOLD}  🎉  АВТОНОМНЫЙ ДИСТРИБУТИВ ANTIGRAVITY ABSOLUTE УСПЕШНО СОБРАН!{Colors.RESET}")
+    print(f"{Colors.GREEN}{Colors.BOLD}" + "═" * 70 + f"{Colors.RESET}")
+    print(f"""
+  {Colors.BOLD}Расположение дистрибутива:{Colors.RESET} {target_dir}
+  {Colors.BOLD}Состав сборки:{Colors.RESET}
+  1. 📦 {Colors.CYAN}resources/app.asar:{Colors.RESET} модифицированный мульти-аккаунт клиент + Control Center.
+  2. 📂 {Colors.CYAN}resources/app.asar.unpacked/bin/:{Colors.RESET} встроенные бинарники agy и agy-daemon.
+  3. 📂 {Colors.CYAN}resources/bin/:{Colors.RESET} встроенные бинарники Rust ядра для быстрого доступа.
+  4. 📋 {Colors.CYAN}resources/presets.yaml & schemas/:{Colors.RESET} 16 пресетов и JSON-схемы валидации.
+  5. 🚀 {Colors.CYAN}launch.vbs & AntigravityAbsolute.bat:{Colors.RESET} запуск клиента с автоматическим управлением демоном.
+  6. 📚 {Colors.CYAN}skills-library/:{Colors.RESET} полный каталог из 101 профессионального навыка.
+""")
+    return target_dir
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Antigravity Supercharged Tweaks & Eligibility Installer")
+    parser = argparse.ArgumentParser(description="Antigravity Supercharged Tweaks & Eligibility Installer / Standalone Distro Builder")
     parser.add_argument("-p", "--path", help="Путь к папке установки Antigravity")
+    parser.add_argument("--standalone", "--distro", "-s", "-d", dest="standalone",
+                        nargs="?", const="", default=None,
+                        help="Сборка/установка автономного дистрибутива 'Antigravity Absolute' (Standalone Distro)")
+    parser.add_argument("--source", help="Исходный каталог Antigravity для копирования рантайма при сборке standalone")
     args = parser.parse_args()
     try:
-        install_tweaks(custom_path=args.path)
+        if args.standalone is not None:
+            build_standalone_distro(target_dir=args.standalone if args.standalone != "" else None,
+                                   source_runtime_dir=args.source or args.path)
+        else:
+            install_tweaks(custom_path=args.path)
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}[!] Прервано пользователем.{Colors.RESET}")
         sys.exit(0)

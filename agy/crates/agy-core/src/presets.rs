@@ -529,6 +529,40 @@ impl PresetManager {
     }
 }
 
+/// Convenience helper to resolve a preset and its active skills from a manifest.
+pub fn resolve_preset(manifest: &PresetsManifest, preset_name: &str) -> Result<ResolvedPreset, PresetError> {
+    let mgr = PresetManager::new(manifest.clone());
+    mgr.resolve_active_skills(preset_name, &[])
+}
+
+/// Generate a structured system prompt based on preset configuration and resolved active skills.
+pub fn build_preset_system_prompt(manifest: &PresetsManifest, preset_name: &str) -> Result<String, PresetError> {
+    let resolved = resolve_preset(manifest, preset_name)?;
+    let preset = manifest.presets.get(&resolved.base);
+    let name = preset.map(|p| p.name.as_str()).unwrap_or(preset_name);
+    let desc = preset.and_then(|p| p.description.as_deref()).unwrap_or("");
+    let icon = preset.and_then(|p| p.icon.as_deref()).unwrap_or("📦");
+
+    let skills_list: Vec<&str> = resolved.active_skills.iter().map(|s| s.as_str()).collect();
+
+    let prompt = format!(
+        "You are Antigravity AI Assistant, operating in CLI mode.\n\
+        Active Preset: {} {} ({})\n\
+        Active Skills ({} total):\n- {}\n\n\
+        Instructions:\n\
+        - Act according to the domain expertise implied by the active preset and skills.\n\
+        - Provide direct, concise, production-ready code and solutions.\n\
+        - Follow systematic debugging and verification best practices.",
+        icon,
+        name,
+        desc,
+        resolved.total_skills,
+        skills_list.join("\n- ")
+    );
+
+    Ok(prompt)
+}
+
 pub fn dirs_home() -> Option<PathBuf> {
     if let Ok(val) = std::env::var("USERPROFILE") {
         if !val.trim().is_empty() {
@@ -598,5 +632,18 @@ mod tests {
         let res = mgr.resolve_active_skills("backend", &overlays).unwrap();
         assert!(res.active_skills.contains("fastapi-async-architect"));
         assert!(res.active_skills.contains("react-best-practices"));
+    }
+
+    #[test]
+    fn test_resolve_preset_and_system_prompt() {
+        let manifest = PresetManager::load_default().manifest;
+        let res = resolve_preset(&manifest, "backend").unwrap();
+        assert_eq!(res.base, "backend");
+        assert!(res.active_skills.contains("postgres-dba-optimizer"));
+
+        let prompt = build_preset_system_prompt(&manifest, "backend").unwrap();
+        assert!(prompt.contains("Backend & DB"));
+        assert!(prompt.contains("postgres-dba-optimizer"));
+        assert!(prompt.contains("Active Preset:"));
     }
 }

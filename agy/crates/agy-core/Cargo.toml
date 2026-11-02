@@ -15,6 +15,8 @@ base64 = "0.22"
 tokio = { version = "1.38", features = ["full"] }
 tracing = "0.1"
 thiserror = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+futures-util = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 junction = "2.1"

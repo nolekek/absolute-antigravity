@@ -356,3 +356,81 @@ fn test_multi_tenant_workspace_and_slot_isolation() {
         assert_eq!(agy_core::ipc::normalize_ipc_path("/tmp/tenant-alpha.sock"), "/tmp/tenant-alpha.sock");
     }
 }
+
+#[tokio::test]
+async fn test_chat_and_api_integration_pipeline() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // 1. Verify preset system prompt builder
+    let manifest = PresetManager::load_default().manifest;
+    let system_prompt = agy_core::build_preset_system_prompt(&manifest, "systems").unwrap();
+    assert!(system_prompt.contains("Systems & High-Perf"));
+    assert!(system_prompt.contains("rust-systems-safe"));
+    assert!(system_prompt.contains("Active Skills"));
+
+    // 2. Mock SSE HTTP server simulating Gemini streaming API
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut req_buf = vec![0u8; 4096];
+            let _ = socket.read(&mut req_buf).await;
+            let req_str = String::from_utf8_lossy(&req_buf);
+
+            // Verify bearer token header or API key was forwarded
+            assert!(req_str.contains("authorization: Bearer test-secret-token") || req_str.contains("Authorization: Bearer test-secret-token"));
+
+            let sse_data = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Chunk 1: Hello \"}],\"role\":\"model\"}}]}\n\n\
+                            data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Chunk 2: from \"}],\"role\":\"model\"}}]}\n\n\
+                            data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Antigravity!\"}],\"role\":\"model\"}}]}\n\n\
+                            data: [DONE]\n\n";
+
+            let http_response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                Content-Type: text/event-stream\r\n\
+                Content-Length: {}\r\n\
+                Connection: close\r\n\r\n{}",
+                sse_data.len(),
+                sse_data
+            );
+            let _ = socket.write_all(http_response.as_bytes()).await;
+        }
+    });
+
+    // 3. Client streaming execution
+    let client = agy_core::GeminiClient::new(
+        Some("gemini-2.0-flash".to_string()),
+        Some("test-secret-token".to_string()),
+    )
+    .with_endpoint_base(format!("http://127.0.0.1:{}", port));
+
+    let history = vec![
+        agy_core::ChatMessage {
+            role: "user".to_string(),
+            content: "Who are you?".to_string(),
+        },
+        agy_core::ChatMessage {
+            role: "model".to_string(),
+            content: "I am Antigravity AI.".to_string(),
+        },
+    ];
+
+    let mut chunks = Vec::new();
+    let full_text = client
+        .stream_generate(
+            "Write a hello world in Rust",
+            &history,
+            Some(&system_prompt),
+            |c| chunks.push(c.to_string()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(full_text, "Chunk 1: Hello Chunk 2: from Antigravity!");
+    assert_eq!(chunks.len(), 3);
+    assert_eq!(chunks[0], "Chunk 1: Hello ");
+    assert_eq!(chunks[1], "Chunk 2: from ");
+    assert_eq!(chunks[2], "Antigravity!");
+}

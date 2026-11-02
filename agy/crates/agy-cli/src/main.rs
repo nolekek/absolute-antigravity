@@ -1,19 +1,22 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
-use agy_core::credentials::{CredentialManager, ProjectConfig};
+use agy_core::credentials::{CredentialManager, ProjectConfig, SlotResolutionSource};
 use agy_core::ipc::{IpcRequest, IpcResponse};
 use agy_core::presets::PresetManager;
 use agy_core::symlink::SymlinkEngine;
+use agy_core::{
+    build_preset_system_prompt, resolve_preset, ChatMessage, GeminiClient, DEFAULT_MODEL,
+};
 
 #[derive(Parser)]
 #[command(
     name = "agy",
     version = "3.0.0",
     about = "Autonomous Headless CLI for Absolute Antigravity",
-    after_help = "Examples:\n  agy preset switch backend qa\n  agy preset switch web +qa +docker -w /path/to/project\n  agy preset list\n  agy account status\n  agy account rotate\n  agy account get-token\n  agy account export-env\n  agy project init --slot 2 --preset backend\n  agy daemon start"
+    after_help = "Examples:\n  agy chat\n  agy chat --preset backend --model gemini-2.0-flash\n  cat code.rs | agy exec \"найди баги\"\n  agy exec \"Объясни модель владения в Rust\"\n  agy preset switch backend qa\n  agy preset switch web +qa +docker -w /path/to/project\n  agy preset list\n  agy account status\n  agy account rotate\n  agy account get-token\n  agy account export-env\n  agy project init --slot 2 --preset backend\n  agy daemon start"
 )]
 struct Cli {
     /// Custom Named Pipe / Unix Socket path
@@ -45,6 +48,32 @@ enum Commands {
     Project {
         #[command(subcommand)]
         cmd: ProjectCommands,
+    },
+    /// Interactive TUI chat session with Gemini streaming and preset context
+    Chat {
+        /// Account slot to use (optional, defaults to bound/active slot)
+        #[arg(short, long)]
+        slot: Option<usize>,
+        /// Preset to use (optional, defaults to active preset)
+        #[arg(short, long)]
+        preset: Option<String>,
+        /// Model name to use (optional, defaults to AGY_MODEL or gemini-2.0-flash)
+        #[arg(short, long)]
+        model: Option<String>,
+    },
+    /// Execute a one-shot prompt with streaming output (supports stdin pipes)
+    Exec {
+        /// Prompt string (can also be piped via stdin)
+        prompt: Option<String>,
+        /// Account slot to use (optional, defaults to bound/active slot)
+        #[arg(short, long)]
+        slot: Option<usize>,
+        /// Preset to use (optional, defaults to active preset)
+        #[arg(short, long)]
+        preset: Option<String>,
+        /// Model name to use (optional, defaults to AGY_MODEL or gemini-2.0-flash)
+        #[arg(short, long)]
+        model: Option<String>,
     },
 }
 
@@ -730,6 +759,297 @@ fn execute_daemon_start(foreground: bool, socket: Option<&str>) -> anyhow::Resul
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Chat and Exec Subcommands
+// ---------------------------------------------------------------------------
+
+async fn execute_chat(
+    slot: Option<usize>,
+    preset: Option<String>,
+    model: Option<String>,
+) -> anyhow::Result<()> {
+    let ws = agy_core::symlink::detect_workspace(None);
+    let cred_mgr = CredentialManager::default_manager();
+    let (mut current_slot, _) = cred_mgr
+        .resolve_slot(slot.map(|s| s as u32), ws.as_deref())
+        .unwrap_or((1, SlotResolutionSource::GlobalActive));
+
+    let mut email = cred_mgr
+        .get_status()
+        .ok()
+        .and_then(|st| {
+            st.accounts
+                .iter()
+                .find(|a| a.slot == current_slot)
+                .map(|a| a.email.clone())
+        })
+        .unwrap_or_else(|| "Не авторизован".to_string());
+
+    let mut current_preset = match preset {
+        Some(p) => p,
+        None => {
+            if let Some(ref w) = ws {
+                if let Ok(Some(cfg)) = ProjectConfig::load(w) {
+                    cfg.preset.unwrap_or_else(get_active_preset)
+                } else {
+                    get_active_preset()
+                }
+            } else {
+                get_active_preset()
+            }
+        }
+    };
+
+    let preset_mgr = PresetManager::load_auto(None);
+    let mut resolved_preset = resolve_preset(&preset_mgr.manifest, &current_preset).ok();
+    let mut system_prompt = build_preset_system_prompt(&preset_mgr.manifest, &current_preset).ok();
+
+    let current_model = model.unwrap_or_else(|| {
+        std::env::var("AGY_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
+    });
+
+    let mut client = GeminiClient::from_slot(Some(current_slot), Some(current_model.clone()));
+
+    let skills_count = resolved_preset.as_ref().map(|r| r.total_skills).unwrap_or(0);
+
+    println!();
+    println!("{}", "╭──────────────────────────────────────────────────────────────────╮".cyan());
+    println!("{}  {}                      {}", "│".cyan(), "✨ Antigravity Headless TUI Chat".bold().white(), "│".cyan());
+    println!("{}  {} [{}] ({})", "│".cyan(), "👤 Слот:".bold(), current_slot.to_string().yellow().bold(), email.green());
+    println!("{}  {} {} ({} активных навыков)", "│".cyan(), "🎯 Пресет:".bold(), current_preset.bold().magenta(), skills_count.to_string().green());
+    println!("{}  {} {}", "│".cyan(), "🤖 Модель:".bold(), current_model.cyan().bold());
+    println!("{}                                                                  {}", "│".cyan(), "│".cyan());
+    println!("{}  {} /preset <name>, /slot <N>, /status, /clear, /exit      {}", "│".cyan(), "Команды:".dimmed(), "│".cyan());
+    println!("{}", "╰──────────────────────────────────────────────────────────────────╯".cyan());
+    println!();
+
+    let mut history: Vec<ChatMessage> = Vec::new();
+    let stdin = io::stdin();
+    let mut line_buf = String::new();
+
+    loop {
+        print!("{} ", "agy >".green().bold());
+        let _ = io::stdout().flush();
+        line_buf.clear();
+
+        if stdin.read_line(&mut line_buf)? == 0 {
+            // EOF reached (Ctrl+D / Ctrl+Z)
+            println!("\n{}", "Сессия чата завершена.".dimmed());
+            break;
+        }
+
+        let input = line_buf.trim();
+        if input.is_empty() {
+            continue;
+        }
+
+        // Handle Slash Commands
+        if input.starts_with('/') {
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            let cmd = parts[0];
+            match cmd {
+                "/exit" | "/quit" | "/q" => {
+                    println!("{}", "👋 До свидания!".cyan().bold());
+                    break;
+                }
+                "/help" | "/?" => {
+                    println!("\n{}", "Доступные slash-команды:".bold());
+                    println!("  {}     - сменить активный пресет (например: /preset backend, /preset web)", "/preset <name>".cyan().bold());
+                    println!("  {}        - переключить слот учетной записи (например: /slot 2)", "/slot <N>".cyan().bold());
+                    println!("  {}         - показать подробный статус сессии", "/status".cyan().bold());
+                    println!("  {}          - очистить историю сообщений", "/clear".cyan().bold());
+                    println!("  {}           - показать справку", "/help".cyan().bold());
+                    println!("  {}           - выйти из чата\n", "/exit".cyan().bold());
+                }
+                "/clear" => {
+                    history.clear();
+                    println!("{}", "🧹 История диалога очищена.".yellow());
+                }
+                "/status" => {
+                    let total = resolved_preset.as_ref().map(|r| r.total_skills).unwrap_or(0);
+                    let skills_str = resolved_preset
+                        .as_ref()
+                        .map(|r| r.active_skills.iter().cloned().collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default();
+                    println!("\n{}", "📊 Статус сессии:".bold());
+                    println!("  👤 Слот: [{}] ({})", current_slot.to_string().cyan().bold(), email.green());
+                    println!("  🎯 Пресет: {} ({} навыков)", current_preset.magenta().bold(), total.to_string().green());
+                    println!("  🤖 Модель: {}", current_model.cyan().bold());
+                    println!("  💬 Сообщений в истории: {}", history.len());
+                    println!("  🛠️ Активные навыки: {}\n", skills_str.dimmed());
+                }
+                "/preset" => {
+                    if parts.len() < 2 {
+                        println!("{} Укажите имя пресета, например: /preset backend", "❌ Ошибка:".red().bold());
+                    } else {
+                        let target = parts[1].to_lowercase();
+                        match resolve_preset(&preset_mgr.manifest, &target) {
+                            Ok(res) => {
+                                current_preset = target;
+                                resolved_preset = Some(res.clone());
+                                system_prompt = build_preset_system_prompt(&preset_mgr.manifest, &current_preset).ok();
+                                println!(
+                                    "{} Пресет переключен на {} ({} активных навыков).",
+                                    "🎯".bold(),
+                                    current_preset.cyan().bold(),
+                                    res.total_skills.to_string().green().bold()
+                                );
+                            }
+                            Err(_) => {
+                                println!("{} Пресет '{}' не найден в манифесте.", "❌ Ошибка:".red().bold(), target);
+                            }
+                        }
+                    }
+                }
+                "/slot" => {
+                    if parts.len() < 2 {
+                        println!("{} Укажите номер слота, например: /slot 2", "❌ Ошибка:".red().bold());
+                    } else if let Ok(s) = parts[1].parse::<u32>() {
+                        current_slot = s;
+                        client = GeminiClient::from_slot(Some(current_slot), Some(current_model.clone()));
+                        email = cred_mgr
+                            .get_status()
+                            .ok()
+                            .and_then(|st| {
+                                st.accounts
+                                    .iter()
+                                    .find(|a| a.slot == current_slot)
+                                    .map(|a| a.email.clone())
+                            })
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        println!(
+                            "{} Переключено на слот [{}] ({})",
+                            "👤".bold(),
+                            current_slot.to_string().cyan().bold(),
+                            email.green().bold()
+                        );
+                    } else {
+                        println!("{} Некорректный номер слота: '{}'", "❌ Ошибка:".red().bold(), parts[1]);
+                    }
+                }
+                _ => {
+                    println!("{} Неизвестная команда '{}'. Введите /help для справки.", "❌".red(), cmd);
+                }
+            }
+            continue;
+        }
+
+        // Gemini Streaming Generation
+        print!("\n{} ", "🤖 Gemini >".cyan().bold());
+        let _ = io::stdout().flush();
+
+        let stream_res = client
+            .stream_generate(
+                input,
+                &history,
+                system_prompt.as_deref(),
+                |chunk| {
+                    print!("{}", chunk);
+                    let _ = io::stdout().flush();
+                },
+            )
+            .await;
+
+        println!("\n");
+
+        match stream_res {
+            Ok(response_text) => {
+                history.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: input.to_string(),
+                });
+                history.push(ChatMessage {
+                    role: "model".to_string(),
+                    content: response_text,
+                });
+            }
+            Err(e) => {
+                eprintln!("{} {}", "❌ Ошибка Gemini API:".red().bold(), e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn format_exec_prompt(prompt: Option<&str>, piped_context: &str) -> Option<String> {
+    let piped = piped_context.trim();
+    match (prompt, piped) {
+        (Some(p), context) if !context.is_empty() => {
+            Some(format!("{}\n\n---\nContext / Input:\n{}", p, context))
+        }
+        (Some(p), _) => Some(p.to_string()),
+        (None, context) if !context.is_empty() => Some(context.to_string()),
+        (None, _) => None,
+    }
+}
+
+async fn execute_exec(
+    prompt: Option<String>,
+    slot: Option<usize>,
+    preset: Option<String>,
+    model: Option<String>,
+) -> anyhow::Result<()> {
+    let mut stdin_content = String::new();
+    let is_piped = !io::stdin().is_terminal();
+    if is_piped {
+        let _ = io::stdin().read_to_string(&mut stdin_content);
+    }
+
+    let final_prompt = match format_exec_prompt(prompt.as_deref(), &stdin_content) {
+        Some(p) => p,
+        None => {
+            anyhow::bail!("No prompt provided. Pass a prompt argument or pipe input via stdin (e.g. cat file.rs | agy exec 'найди баги')");
+        }
+    };
+
+    let ws = agy_core::symlink::detect_workspace(None);
+    let cred_mgr = CredentialManager::default_manager();
+    let (resolved_slot, _) = cred_mgr
+        .resolve_slot(slot.map(|s| s as u32), ws.as_deref())
+        .unwrap_or((1, SlotResolutionSource::GlobalActive));
+
+    let active_preset_name = match preset {
+        Some(p) => p,
+        None => {
+            if let Some(ref w) = ws {
+                if let Ok(Some(cfg)) = ProjectConfig::load(w) {
+                    cfg.preset.unwrap_or_else(get_active_preset)
+                } else {
+                    get_active_preset()
+                }
+            } else {
+                get_active_preset()
+            }
+        }
+    };
+
+    let preset_mgr = PresetManager::load_auto(None);
+    let system_prompt = build_preset_system_prompt(&preset_mgr.manifest, &active_preset_name).ok();
+
+    let target_model = model.unwrap_or_else(|| {
+        std::env::var("AGY_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
+    });
+
+    let client = GeminiClient::from_slot(Some(resolved_slot), Some(target_model));
+
+    client
+        .stream_generate(
+            &final_prompt,
+            &[],
+            system_prompt.as_deref(),
+            |chunk| {
+                print!("{}", chunk);
+                let _ = io::stdout().flush();
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Gemini API error: {}", e))?;
+
+    println!();
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let socket = cli.socket.as_deref();
@@ -937,7 +1257,105 @@ fn main() -> anyhow::Result<()> {
                 execute_daemon_start(foreground, socket)?;
             }
         },
+        Commands::Chat { slot, preset, model } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(execute_chat(slot, preset, model))?;
+        }
+        Commands::Exec {
+            prompt,
+            slot,
+            preset,
+            model,
+        } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(execute_exec(prompt, slot, preset, model))?;
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chat_command_parsing_defaults() {
+        let args = ["agy", "chat"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy chat'");
+        match cli.command {
+            Commands::Chat { slot, preset, model } => {
+                assert_eq!(slot, None);
+                assert_eq!(preset, None);
+                assert_eq!(model, None);
+            }
+            _ => panic!("Expected Commands::Chat"),
+        }
+    }
+
+    #[test]
+    fn test_chat_command_parsing_with_flags() {
+        let args = ["agy", "chat", "-s", "2", "-p", "backend", "-m", "gemini-2.0-flash"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy chat with flags'");
+        match cli.command {
+            Commands::Chat { slot, preset, model } => {
+                assert_eq!(slot, Some(2));
+                assert_eq!(preset, Some("backend".to_string()));
+                assert_eq!(model, Some("gemini-2.0-flash".to_string()));
+            }
+            _ => panic!("Expected Commands::Chat"),
+        }
+    }
+
+    #[test]
+    fn test_exec_command_parsing_with_prompt() {
+        let args = ["agy", "exec", "найди баги в коде", "--slot", "1", "--preset", "qa"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy exec with prompt'");
+        match cli.command {
+            Commands::Exec { prompt, slot, preset, model } => {
+                assert_eq!(prompt, Some("найди баги в коде".to_string()));
+                assert_eq!(slot, Some(1));
+                assert_eq!(preset, Some("qa".to_string()));
+                assert_eq!(model, None);
+            }
+            _ => panic!("Expected Commands::Exec"),
+        }
+    }
+
+    #[test]
+    fn test_exec_command_parsing_piped_no_args() {
+        let args = ["agy", "exec"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy exec' without args");
+        match cli.command {
+            Commands::Exec { prompt, slot, preset, model } => {
+                assert_eq!(prompt, None);
+                assert_eq!(slot, None);
+                assert_eq!(preset, None);
+                assert_eq!(model, None);
+            }
+            _ => panic!("Expected Commands::Exec"),
+        }
+    }
+
+    #[test]
+    fn test_format_exec_prompt_combinations() {
+        // Case 1: Prompt argument only
+        assert_eq!(
+            format_exec_prompt(Some("Explain RAII"), ""),
+            Some("Explain RAII".to_string())
+        );
+
+        // Case 2: Piped context only
+        assert_eq!(
+            format_exec_prompt(None, "fn main() {}\n"),
+            Some("fn main() {}".to_string())
+        );
+
+        // Case 3: Both prompt argument and piped context
+        let combined = format_exec_prompt(Some("Find bugs"), "let x = 1;\n").unwrap();
+        assert!(combined.starts_with("Find bugs\n\n---\nContext / Input:\nlet x = 1;"));
+
+        // Case 4: Neither prompt nor piped context
+        assert_eq!(format_exec_prompt(None, "   "), None);
+    }
 }
