@@ -1511,7 +1511,7 @@ class WebDashboardServer {
   <!-- TAB 4: ПРЕСЕТЫ -->
   <div class="tab-content" id="tabPresets">
     <div class="card-title">
-      <span>🎯 14 Сфокусированных Пресетов</span>
+      <span>🎯 16 Сфокусированных Пресетов</span>
       <span id="currentPresetNameBadge" style="color:#58a6ff; font-size:11px;">Активен: ...</span>
     </div>
     <div class="presets-grid" id="presetsGrid">

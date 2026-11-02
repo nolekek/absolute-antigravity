@@ -1,6 +1,6 @@
 ---
 name: agent-preset-conductor
-description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, product, orchestrator, systems, vst3, meta-dev, minimal), and activates the grill-me skill in disputable/ambiguous situations."
+description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, product, orchestrator, systems, vst3, hardware, media, meta-dev, minimal), and activates the grill-me skill in disputable/ambiguous situations."
 ---
 
 # Agent Preset Conductor & Context Orchestrator
@@ -63,7 +63,7 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 
 ---
 
-## 🧭 МАТРИЦА 14 ПРЕСЕТОВ
+## 🧭 МАТРИЦА 16 ПРЕСЕТОВ (v2.0)
 | Пресет (`ID`) | Название | Маркеры технологий и задачи | Ключевые скиллы пресета |
 |---|---|---|---|
 | `web` | Web Modern | React, Next.js, Vue, Nuxt, Tailwind v4, CSS, HTML, UI/UX дизайн, frontend-design, Web Vitals, SEO, CRO форм, TanStack Query | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `seo-audit`, `form-cro` |
@@ -73,11 +73,13 @@ description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent
 | `qa` | QA & Testing | Playwright E2E тесты, автоматизация десктопа Windows (Windows-MCP), TDD цикл, исправление тестов, нагрузка k6, Code Review | `playwright-e2e-guru`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `unit-test-synthesizer`, `k6-load-testing-pro` |
 | `ai-agents` | AI & MCP Engineering | Создание MCP серверов (Model Context Protocol), Prompt Engineering, RAG архитектура, управление контекстным окном, LangGraph, оценка агентов | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph` |
 | `web-research` | Web Research & OSINT | Высокоточный веб-поиск (native search), сбор данных, OSINT расследования, аналитика без мусора | `search-specialist`, `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator` |
-| `reverse-engineering` | Reverse Engineering & Replica | Полный Clean-Room цикл клонирования приложений (Replica pack: recon, architect, backend, design, build, test, deploy) + Electron ASAR | Полная пачка из 11 скиллов `replica-*` + `reverse-engineer-electron` |
+| `reverse-engineering` | Reverse Engineering & Replica | Полный Clean-Room цикл клонирования приложений + Craft Anything (314 инструментов реверса) + Electron ASAR | `craft-anything`, полная пачка из 11 скиллов `replica-*`, `reverse-engineer-electron` |
 | `product` | Product & Monetization | Стратегия монетизации, тарифы/pricing, юнит-экономика LTV/CAC, карточки товаров, офферы, анализ рынка и конкурентов, CRO | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` |
 | `orchestrator` | Orchestrator & Multi-Agent | Масштабные мультидоменные проекты, координация команды субагентов, параллельная разработка с компиляцией изолированных пресетов | `subagent-orchestrator`, `hierarchical-task-decomposer`, `multi-agent-debate-consensus`, `context-synthesis-reducer`, `ai-agents-architect`, `prompt-engineering`, `langgraph`, `code-review-checklist`, `premortem-redteam` |
 | `systems` | Systems & High-Perf | C++, C, Zig, Rust, ассемблер, RAII, ручное управление памятью, lock-free многопоточность, SIMD, санитайзеры ASan/TSan, CMake/Ninja, низкоуровневая оптимизация и профилирование | `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `rust-systems-safe`, `memory-safety-patterns`, `test-driven-development`, `test-fixing`, `code-review-checklist` |
 | `vst3` | VST3 & Audio DSP Studio | VST3/VST3i плагины, синтезаторы, DSP эффекты, JUCE C++, real-time audio thread safety, кастомный LookAndFeel и аудио UI/UX дизайн | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` |
+| `hardware` | Hardware & CAD/CAM Studio | САПР, 2D/3D черчение DWG/DXF (CADCraft), параметрическое 3D моделирование SolidWorks/STEP (SolidCraft), PBR материалы (TextureCraft) | `solidcraft-modeling`, `cadcraft-drafting`, `texturecraft-pbr`, `cpp-systems-architect`, `systems-lowlevel-perf` |
+| `media` | Creative Studio & Media Production | Видеомонтаж (FilmCraft), моушн-дизайн VFX (EffectCraft), проявка RAW фото (LightCraft), растр PSD (PhotoCraft), вектор SVG (VectorCraft), UI/UX (FigCraft) | `filmcraft-video`, `effectcraft-vfx`, `lightcraft-photo`, `photocraft-studio`, `vectorcraft-artwork`, `figcraft-design`, `ui-ux-pro-max`, `frontend-design` |
 | `meta-dev` | Antigravity Core & Self-Dev | Внутренняя разработка Antigravity: Electron ASAR сборка/деплой, мультиаккаунт, ранбук `antigravity-core-dev`, тесты и автоматизация | `antigravity-core-dev`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `nodejs-best-practices`, `subagent-orchestrator` |
 | `minimal` | Minimal Context | Свободный диалог, концептуальные обсуждения, задачи без специфики конкретного стека. Максимальная экономия контекста | Только фундаментальные глобальные скиллы качества |
 

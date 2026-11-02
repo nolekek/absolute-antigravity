@@ -70,3 +70,12 @@ Antigravity is an Electron-based desktop client wrapping a Go language server ba
 - Command Interface: `execFile("python", [SCRIPT_PATH, command, ...args], { encoding: "utf-8" })`
 - Commands: `status`, `switch [slot|"next"]`, `toggle-autofailover [1|0]`, `prepare-add-login [slot]`, `finalize-add-login [slot]`, `cancel-add-login`, `delete-slot <slot>`
 - Output Format: JSON object printed to stdout with `{ activeSlot, autoFailover, accounts: [{ slot, email }], ... }` or `{ error: "..." }`.
+
+### M6: ArtCraft Suite & Dedicated Presets Integration (v2.0)
+- **Features**:
+  - Integration of 10 native Rust MCP engines (`craft-anything`, `cadcraft`, `solidcraft`, `texturecraft`, `filmcraft`, `effectcraft`, `lightcraft`, `photocraft`, `vectorcraft`, `figcraft`).
+  - Addition of dedicated presets `hardware` and `media` (expanding matrix to 16 presets).
+  - Automated MCP discovery & synchronization engine (`scripts/sync_artcraft_mcp.py`).
+  - Enhanced heuristics in `stackDetector.js` for CAD, 3D, VFX, and reverse-engineering artifacts.
+  - Comprehensive handoff documentation in `ARTCRAFT_HANDOFF.md`.
+- **Status**: COMPLETED (100% test pass on `node tests/run_all.js`).

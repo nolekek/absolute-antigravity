@@ -27,7 +27,7 @@ PRESET_SKILLS_MAP = {
     "web": [
         "ui-ux-pro-max", "frontend-design", "react-best-practices", "seo-audit", "form-cro",
         "nextjs-fullstack-guru", "tailwind-v4-master", "react-performance-opt", 
-        "vue-nuxt-expert", "web-state-query-master", "web-performance-auditor", 
+        "vue-nuxt-expert", "web-state-query-master", "web-performance-auditor", "figcraft-design", "vectorcraft-artwork", 
         "agent-preset-conductor", "ai-product-partner", "modern-web-guidance", "generative_ui"
     ],
     "backend": [
@@ -45,7 +45,7 @@ PRESET_SKILLS_MAP = {
     ],
     "appsec": [
         "top-web-vulnerabilities", "api-security-best-practices", "ethical-hacking-methodology",
-        "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control", 
+        "appsec-code-auditor", "craft-anything", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control", 
         "network-traffic-intercept", "api-pentest-fuzzer", 
         "agent-preset-conductor", "premortem-redteam"
     ],
@@ -64,7 +64,7 @@ PRESET_SKILLS_MAP = {
         "osint-recon-investigator", "agent-preset-conductor", "ai-product-partner"
     ],
     "reverse-engineering": [
-        "replica-recon", "replica-architect", "replica-backend", "replica-brand", 
+        "craft-anything", "replica-recon", "replica-architect", "replica-backend", "replica-brand", 
         "replica-build", "replica-deploy", "replica-design", "replica-diff", 
         "replica-entrepreneur", "replica-launch", "replica-test", 
         "reverse-engineer-electron", "agent-preset-conductor", "ai-product-partner"
@@ -79,6 +79,7 @@ PRESET_SKILLS_MAP = {
         "subagent-orchestrator", "hierarchical-task-decomposer", "multi-agent-debate-consensus",
         "context-synthesis-reducer", "ai-agents-architect", "prompt-engineering",
         "context-window-management", "agent-evaluation", "langgraph",
+        "artcraft-orchestrator", "craft-anything", "figcraft-design",
         "code-review-checklist", "premortem-redteam", "ai-product-partner", "agent-preset-conductor"
     ],
     "systems": [
@@ -87,10 +88,21 @@ PRESET_SKILLS_MAP = {
         "test-fixing", "code-review-checklist", "agent-preset-conductor"
     ],
     "vst3": [
-        "vst3-dsp-architect", "audio-plugin-ui-ux", "cpp-systems-architect",
+        "vst3-dsp-architect", "audio-plugin-ui-ux", "figcraft-design", "vectorcraft-artwork", "cpp-systems-architect",
         "systems-lowlevel-perf", "lockfree-concurrency-patterns",
         "subagent-orchestrator", "hierarchical-task-decomposer",
         "test-driven-development", "test-fixing", "code-review-checklist",
+        "agent-preset-conductor"
+    ],
+    "hardware": [
+        "solidcraft-modeling", "cadcraft-drafting", "texturecraft-pbr",
+        "cpp-systems-architect", "systems-lowlevel-perf",
+        "agent-preset-conductor", "ai-product-partner"
+    ],
+    "media": [
+        "filmcraft-video", "effectcraft-vfx", "lightcraft-photo",
+        "photocraft-studio", "vectorcraft-artwork", "figcraft-design",
+        "ui-ux-pro-max", "frontend-design", "ai-product-partner",
         "agent-preset-conductor"
     ],
     "meta-dev": [

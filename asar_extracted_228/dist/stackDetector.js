@@ -115,6 +115,56 @@ function detectProjectStack(workspacePath) {
             };
         }
 
+        // 3.5. Hardware, CAD/CAM & Parametric 3D Engineering
+        const hasHardwareFiles = files.some(f => {
+            const lower = f.toLowerCase();
+            return lower.endsWith(".sc") || lower.endsWith(".step") || lower.endsWith(".stp") || 
+                   lower.endsWith(".stl") || lower.endsWith(".dxf") || lower.endsWith(".dwg") || 
+                   lower.endsWith(".dwt");
+        });
+        if (hasHardwareFiles) {
+            return {
+                id: "hardware",
+                name: "Hardware & CAD/CAM Studio",
+                icon: "📐",
+                description: "Параметрический 3D CAD (SolidCraft), 2D/3D черчение DWG/DXF (CADCraft) и PBR материалы (TextureCraft)",
+                skills: ["solidcraft-modeling", "cadcraft-drafting", "texturecraft-pbr", "cpp-systems-architect", "agent-preset-conductor"]
+            };
+        }
+
+        // 3.6. Creative Studio, VFX & Media Production
+        const hasMediaFiles = files.some(f => {
+            const lower = f.toLowerCase();
+            return lower.endsWith(".fcproj") || lower.endsWith(".ecproj") || lower.endsWith(".pcraft") || 
+                   lower.endsWith(".psd") || lower.endsWith(".vcraft") || lower.endsWith(".tcraft") || 
+                   lower.endsWith(".figcraft") || lower.endsWith(".penpot") || lower.endsWith(".arw") || 
+                   lower.endsWith(".nef") || lower.endsWith(".cr3") || lower.endsWith(".raf");
+        });
+        if (hasMediaFiles) {
+            return {
+                id: "media",
+                name: "Creative Studio & Media Production",
+                icon: "🎨",
+                description: "Видеомонтаж (FilmCraft), моушн-дизайн VFX (EffectCraft), растр PSD (PhotoCraft), вектор SVG (VectorCraft), RAW фото (LightCraft)",
+                skills: ["filmcraft-video", "effectcraft-vfx", "photocraft-studio", "vectorcraft-artwork", "lightcraft-photo", "figcraft-design", "agent-preset-conductor"]
+            };
+        }
+
+        // 3.7. Craft Anything & Clean-Room Reverse Engineering Projects
+        const hasReversingFiles = files.some(f => {
+            const lower = f.toLowerCase();
+            return lower.endsWith(".cany") || lower.endsWith(".apk") || lower.endsWith(".dex");
+        });
+        if (hasReversingFiles) {
+            return {
+                id: "reverse-engineering",
+                name: "Reverse Engineering & Replica",
+                icon: "🧬",
+                description: "Доказательный реверс-инжиниринг с Craft Anything (314 инструментов) и Clean-Room репликация",
+                skills: ["craft-anything", "replica-recon", "replica-architect", "reverse-engineer-electron", "agent-preset-conductor"]
+            };
+        }
+
         // 4. Security / Reversing
         if (files.some(f => f.endsWith(".asar") || f.toLowerCase().includes("patch") || f.toLowerCase().includes("crack") || f.toLowerCase().includes("exploit"))) {
             return {

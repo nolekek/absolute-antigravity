@@ -35,8 +35,9 @@
 - ⚡ **1-Click ротация и карусель:** Интерактивный виджет `[1/3]` в заголовке окна для мгновенного переключения активного аккаунта без перезапуска IDE и без потери вкладок/сессий.
 - 🛡️ **Auto-Failover по квотам:** Автоматический перехват gRPC `ResourceExhausted` и HTTP 429 ошибок Language Server с мягким переключением на следующий аккаунт (cooldown 25 сек).
 - 🔓 **Eligibility Bypass:** Встроенный патчер региональных ограничений (`manager.py`), открывающий полный доступ без VPN на Windows и Linux.
-- 🤖 **Telegram Remote Commander:** Управление клиентом со смартфона: выполнение команд, голосовой ввод, запуск задач, мониторинг квот (недельная + 5-часовая) и уведомления.
-- 🎛️ **Control Center & Dynamic Skill Workshop:** Умная оркестрация навыков модели (41 скилл, 8 пресетов), экономящая **до 15 000+ токенов** в системном контексте за счёт адаптивного переключения на лету.
+- 📱 **Mobile Web Client (LAN):** Полнофункциональный веб-клиент на порту `51125` для управления Antigravity со смартфона (чаты, переключение проектов, просмотр артефактов и планов, 16 пресетов, квоты без лагов).
+- 🎨 **ArtCraft Suite & 10 Local MCP Engines (v2.0):** Интеграция локального флота из 10 нативных 64-битных Rust движков (CAD, SolidWorks-like 3D, Substance-like PBR, Premiere-like NLE, After Effects-like VFX, Lightroom-like RAW, Photoshop-like растр, Illustrator-like вектор, Figma-like UI и Clean-Room реверс).
+- 🎛️ **Control Center & Dynamic Skill Workshop:** Умная оркестрация навыков модели (101 скилл, 16 сфокусированных пресетов), экономящая **до 15 000+ токенов** в системном контексте за счёт адаптивного переключения на лету.
 
 ---
 
@@ -50,8 +51,8 @@
 3. **Быстрому исчерпанию квот:** Каждый лишний токен в промпте ускоряет исчерпание лимитов TPM (Tokens Per Minute).
 
 **Решение модуля Control Center:**
-- Создана библиотека из **90 специализированных навыков** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
-- Реализована система из **14 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Systems, VST3, Meta-Dev, Minimal).
+- Создана библиотека из **101 специализированный навык** (`skills-library/`), синхронизируемая в `~/.gemini/config/skills/`.
+- Реализована система из **16 доменных пресетов** (Web, Backend, DevOps, AppSec, QA, AI-Agents, Web-Research, Reverse-Engineering, Product, Orchestrator, Systems, VST3, Meta-Dev, Minimal).
 - Переключение происходит мгновенно на лету без перезапуска клиента через атомарный тогл файлов (`SKILL.md` ↔ `SKILL.md.disabled`).
 - Модель снабжена автономным дирижёром `agent-preset-conductor`, позволяющим ей **самостоятельно переключать пресет** под конкретную задачу.
 
@@ -59,7 +60,7 @@
 
 ### Каталог пресетов и матрица скиллов
 
-Библиотека включает **90 production-grade навыков**, распределённых по целевым пресетам:
+Библиотека включает **101 production-grade навык**, распределённых по целевым пресетам:
 
 | Пресет | ID | Иконка | Состав навыков | Описание стека |
 |---|---|---|---|---|
@@ -74,7 +75,9 @@
 | **Product & Monetization** | `product` | 💎 | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` | Стратегия монетизации, юнит-экономика LTV/CAC, офферы (Hormozi), карточки товаров (маркетплейсы), конкурентный анализ и CRO |
 | **Orchestrator & Multi-Agent** | `orchestrator` | 🎭 | `subagent-orchestrator`, `hierarchical-task-decomposer`, `multi-agent-debate-consensus`, `context-synthesis-reducer`, `ai-agents-architect`, `prompt-engineering`, `context-window-management`, `agent-evaluation`, `langgraph`, `code-review-checklist`, `premortem-redteam`, `ai-product-partner` | Мультиагентная оркестрация, декомпозиция крупных проектов, субагенты с изолированными профилями пресетов, арбитраж консенсуса и верификация |
 | **Systems & High-Perf** | `systems` | ⚡ | `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `rust-systems-safe`, `memory-safety-patterns`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Modern C++20/C++23, C, Zig, Rust, RAII, ручное управление памятью, lock-free, SIMD, санитайзеры ASan/TSan, CMake и профилирование |
-| **VST3 & Audio DSP Studio** | `vst3` | 🎛️ | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Разработка VST3/VST3i плагинов, синтезаторов и DSP эффектов: JUCE C++, real-time audio thread safety, SIMD, аудио UI/UX дизайн |
+| **VST3 & Audio DSP Studio** | `vst3` | 🎛️ | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `figcraft-design`, `vectorcraft-artwork`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` | Разработка VST3/VST3i плагинов, синтезаторов и DSP эффектов: JUCE C++, real-time audio thread safety, SIMD, аудио UI/UX дизайн |
+| **Hardware & CAD/CAM Studio** | `hardware` | 📐 | `solidcraft-modeling`, `cadcraft-drafting`, `texturecraft-pbr`, `cpp-systems-architect`, `systems-lowlevel-perf`, `agent-preset-conductor`, `ai-product-partner` | 3D параметрическое твердотельное моделирование (SolidCraft), 2D/3D чертежи DWG/DXF (CADCraft), 3D PBR текстуры (TextureCraft), экспорт STEP/STL |
+| **Creative Studio & Media** | `media` | 🎨 | `filmcraft-video`, `effectcraft-vfx`, `lightcraft-photo`, `photocraft-studio`, `vectorcraft-artwork`, `figcraft-design`, `ui-ux-pro-max`, `frontend-design`, `ai-product-partner`, `agent-preset-conductor` | Нелинейный видеомонтаж NLE (FilmCraft), VFX моушн-дизайн (EffectCraft), проявка RAW (LightCraft), растр PSD (PhotoCraft), вектор SVG (VectorCraft), дизайн-системы (FigCraft) |
 | **Antigravity Core & Self-Dev** | `meta-dev` | 🛠️ | `antigravity-core-dev`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `nodejs-best-practices`, `subagent-orchestrator` | Разработка ядра Antigravity: Electron ASAR сборка/деплой, мультиаккаунт, ранбук `antigravity-core-dev`, тесты и автоматизация |
 | **Minimal Context** | `minimal` | ⚡ | `agent-preset-conductor`, `ai-product-partner` (+ глобальные скиллы) | Чистый контекст для свободных диалогов и максимальной скорости ответов |
 

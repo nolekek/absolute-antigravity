@@ -15,7 +15,7 @@ const PRESETS = {
         skills: [
             "ui-ux-pro-max", "frontend-design", "react-best-practices", "seo-audit", "form-cro",
             "nextjs-fullstack-guru", "tailwind-v4-master", "react-performance-opt", "vue-nuxt-expert",
-            "web-state-query-master", "web-performance-auditor", "agent-preset-conductor",
+            "web-state-query-master", "web-performance-auditor", "figcraft-design", "vectorcraft-artwork", "agent-preset-conductor",
             "ai-product-partner", "modern-web-guidance", "generative_ui"
         ]
     },
@@ -51,7 +51,7 @@ const PRESETS = {
         description: "OWASP Top-10, API security, Ethical hacking, Electron ASAR, Win32/PS & Desktop UI, Network intercept",
         skills: [
             "top-web-vulnerabilities", "api-security-best-practices", "ethical-hacking-methodology",
-            "appsec-code-auditor", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control",
+            "appsec-code-auditor", "craft-anything", "reverse-engineer-electron", "win32-powershell-automation", "windows-desktop-control",
             "network-traffic-intercept", "api-pentest-fuzzer", "agent-preset-conductor", "premortem-redteam"
         ]
     },
@@ -90,7 +90,7 @@ const PRESETS = {
         icon: "🧬",
         description: "Полный Clean-Room цикл (11 скиллов Replica) + Electron ASAR реверс-инжиниринг",
         skills: [
-            "replica-recon", "replica-architect", "replica-backend", "replica-brand",
+            "craft-anything", "replica-recon", "replica-architect", "replica-backend", "replica-brand",
             "replica-build", "replica-deploy", "replica-design", "replica-diff",
             "replica-entrepreneur", "replica-launch", "replica-test",
             "reverse-engineer-electron", "agent-preset-conductor", "ai-product-partner"
@@ -117,6 +117,7 @@ const PRESETS = {
             "subagent-orchestrator", "hierarchical-task-decomposer", "multi-agent-debate-consensus",
             "context-synthesis-reducer", "ai-agents-architect", "prompt-engineering",
             "context-window-management", "agent-evaluation", "langgraph",
+            "artcraft-orchestrator", "craft-anything", "figcraft-design",
             "code-review-checklist", "premortem-redteam", "ai-product-partner", "agent-preset-conductor"
         ]
     },
@@ -137,10 +138,33 @@ const PRESETS = {
         icon: "🎛️",
         description: "Разработка VST3/VST3i плагинов, синтезаторов и DSP эффектов: JUCE C++, real-time audio thread safety, SIMD, аудио UI/UX дизайн и мультиагентная оркестрация",
         skills: [
-            "vst3-dsp-architect", "audio-plugin-ui-ux", "cpp-systems-architect",
+            "vst3-dsp-architect", "audio-plugin-ui-ux", "figcraft-design", "vectorcraft-artwork", "cpp-systems-architect",
             "systems-lowlevel-perf", "lockfree-concurrency-patterns",
             "subagent-orchestrator", "hierarchical-task-decomposer",
             "test-driven-development", "test-fixing", "code-review-checklist",
+            "agent-preset-conductor"
+        ]
+    },
+    "hardware": {
+        id: "hardware",
+        name: "Hardware & CAD/CAM Studio",
+        icon: "📐",
+        description: "Параметрическое 3D твердотельное моделирование (SolidCraft), 2D/3D черчение DWG/DXF (CADCraft), 3D PBR текстурирование (TextureCraft), экспорт STEP/STL",
+        skills: [
+            "solidcraft-modeling", "cadcraft-drafting", "texturecraft-pbr",
+            "cpp-systems-architect", "systems-lowlevel-perf",
+            "agent-preset-conductor", "ai-product-partner"
+        ]
+    },
+    "media": {
+        id: "media",
+        name: "Creative Studio & Media Production",
+        icon: "🎨",
+        description: "Нелинейный видеомонтаж (FilmCraft), моушн-дизайн и визуальные эффекты (EffectCraft), проявка RAW и HDR (LightCraft), растр PSD (PhotoCraft), вектор SVG (VectorCraft), дизайн-системы (FigCraft)",
+        skills: [
+            "filmcraft-video", "effectcraft-vfx", "lightcraft-photo",
+            "photocraft-studio", "vectorcraft-artwork", "figcraft-design",
+            "ui-ux-pro-max", "frontend-design", "ai-product-partner",
             "agent-preset-conductor"
         ]
     },
