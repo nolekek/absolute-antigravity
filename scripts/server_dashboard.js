@@ -1477,45 +1477,81 @@ class ServerDashboard {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#090d16">
+  <meta name="theme-color" content="#08090d">
   <style>
     :root {
-      --bg: #090d16;
-      --bg-card: #131822;
-      --bg-hover: #1a2230;
-      --border: rgba(255, 255, 255, 0.09);
-      --border-focus: #58a6ff;
-      --text: #e6edf3;
-      --text-muted: #8b949e;
-      --accent: #58a6ff;
-      --green: #2ea043;
-      --orange: #f0883e;
-      --purple: #bc8cff;
-      --red: #f85149;
-      --radius: 12px;
-      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --bg-page: #08090d;
+      --bg-surface: rgba(15, 20, 32, 0.72);
+      --bg-surface-elevated: rgba(22, 29, 46, 0.82);
+      --bg-card: rgba(17, 23, 36, 0.65);
+      --bg-hover: rgba(255, 255, 255, 0.06);
+      --bg-input: #0b0f17;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-subtle: rgba(255, 255, 255, 0.05);
+      --border-hover: rgba(255, 255, 255, 0.18);
+      --border-focus: #3b82f6;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --accent-glow: rgba(59, 130, 246, 0.35);
+      --violet: #8b5cf6;
+      --violet-hover: #a78bfa;
+      --violet-glow: rgba(139, 92, 246, 0.35);
+      --green: #10b981;
+      --green-glow: rgba(16, 185, 129, 0.35);
+      --orange: #f59e0b;
+      --red: #f43f5e;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-full: 9999px;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
+      font-family: var(--font-sans);
+      background-color: var(--bg-page);
+      background-image:
+        radial-gradient(ellipse 90% 50% at 50% -10%, rgba(59, 130, 246, 0.12), transparent 70%),
+        radial-gradient(ellipse 70% 40% at 90% 100%, rgba(139, 92, 246, 0.08), transparent 60%);
+      background-attachment: fixed;
       color: var(--text);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       overflow-x: hidden;
-      padding-bottom: 74px;
+      padding-bottom: 76px;
+      -webkit-font-smoothing: antialiased;
     }
-    /* Top Header */
+
+    /* Top Navigation Header */
     header {
-      background: rgba(19, 24, 34, 0.88);
+      background: rgba(11, 15, 24, 0.82);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       position: sticky;
       top: 0;
       z-index: 100;
       border-bottom: 1px solid var(--border);
-      padding: 10px 16px;
+      padding: 10px 18px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -1525,57 +1561,44 @@ class ServerDashboard {
       align-items: center;
       gap: 10px;
       font-weight: 700;
-      font-size: 15px;
+      font-size: 14.5px;
       letter-spacing: -0.2px;
     }
     .brand-logo {
-      width: 26px;
-      height: 26px;
-      background: linear-gradient(135deg, #1f6feb, #8957e5);
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
       border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 12px rgba(31, 111, 235, 0.5);
+      box-shadow: 0 0 16px rgba(99, 102, 241, 0.45);
+      font-size: 15px;
     }
-    .header-pills {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    .brand-badge {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: #93c5fd;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 1px 6px;
+      border-radius: 6px;
+      margin-left: 6px;
     }
-    .pill {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border);
-      font-size: 11px;
-      padding: 4px 9px;
-      border-radius: 20px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      cursor: pointer;
-      color: var(--text);
-      font-weight: 500;
-    }
-    .pill:hover { background: var(--bg-hover); }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 8px var(--green);
-      animation: pulseDot 2s infinite ease-in-out;
-    }
-    .status-dot.offline { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
-    @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-    /* Desktop Tab Bar */
+    /* Desktop Navigation Tabs */
     .desktop-tabs {
       display: none;
-      gap: 6px;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 3px;
+      border-radius: 10px;
+      border: 1px solid var(--border-subtle);
     }
     @media (min-width: 820px) {
       .desktop-tabs { display: flex; }
-      body { padding-bottom: 20px; }
+      body { padding-bottom: 24px; }
       .nav-bar { display: none !important; }
     }
     .d-tab-btn {
@@ -1583,9 +1606,9 @@ class ServerDashboard {
       border: none;
       color: var(--text-muted);
       padding: 6px 12px;
-      border-radius: 8px;
+      border-radius: 7px;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       display: flex;
       align-items: center;
@@ -1593,7 +1616,75 @@ class ServerDashboard {
       transition: all 0.15s ease;
     }
     .d-tab-btn:hover { color: var(--text); background: var(--bg-hover); }
-    .d-tab-btn.active { color: var(--accent); background: rgba(88, 166, 255, 0.12); border: 1px solid rgba(88, 166, 255, 0.25); }
+    .d-tab-btn.active {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    }
+
+    /* Header Right Quick Status Pills */
+    .header-pills {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pill {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      font-size: 11px;
+      padding: 5px 10px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .pill:hover { background: var(--bg-hover); border-color: var(--border-hover); }
+    .pill-interactive { cursor: pointer; }
+
+    /* Live Radar Ping Indicator */
+    .radar-box {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+    }
+    .radar-dot, .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 10px var(--green);
+      position: relative;
+      z-index: 2;
+      transition: background 0.3s;
+    }
+    .radar-dot.offline, .status-dot.offline {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+    }
+    .radar-wave {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.5);
+      animation: radarPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+      z-index: 1;
+    }
+    .radar-dot.offline ~ .radar-wave, .status-dot.offline ~ .radar-wave {
+      display: none;
+    }
+    @keyframes radarPing {
+      0% { transform: scale(0.8); opacity: 0.9; }
+      70%, 100% { transform: scale(2.6); opacity: 0; }
+    }
 
     /* Mobile Bottom Navigation Bar */
     .nav-bar {
@@ -1601,9 +1692,9 @@ class ServerDashboard {
       bottom: 0;
       left: 0;
       right: 0;
-      background: rgba(19, 24, 34, 0.94);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      background: rgba(11, 15, 24, 0.92);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
       border-top: 1px solid var(--border);
       display: flex;
       justify-content: space-around;
@@ -1618,15 +1709,27 @@ class ServerDashboard {
       align-items: center;
       background: transparent;
       border: none;
-      color: var(--text-muted);
+      color: var(--text-dim);
       cursor: pointer;
       font-size: 10px;
       font-weight: 600;
-      padding: 4px 0;
+      padding: 5px 0;
       transition: all 0.15s ease;
+      position: relative;
     }
-    .nav-item .nav-icon { font-size: 18px; margin-bottom: 2px; }
-    .nav-item.active { color: var(--accent); }
+    .nav-item .nav-icon { font-size: 18px; margin-bottom: 2px; transition: transform 0.15s; }
+    .nav-item.active { color: #ffffff; }
+    .nav-item.active .nav-icon { transform: translateY(-2px); }
+    .nav-item.active::after {
+      content: "";
+      position: absolute;
+      bottom: 1px;
+      width: 16px;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 2px;
+      box-shadow: 0 0 8px var(--accent);
+    }
 
     /* Tab Containers */
     .tab-content {
@@ -1634,22 +1737,29 @@ class ServerDashboard {
       flex-direction: column;
       flex: 1;
       width: 100%;
-      max-width: 960px;
+      max-width: 980px;
       margin: 0 auto;
-      padding: 14px 16px;
-      animation: fadeIn 0.15s ease-out;
+      padding: 16px 18px;
+      animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .tab-content.active { display: flex; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
 
-    /* Cards */
+    /* Common Card Styles */
     .card {
-      background: var(--bg-card);
+      background: var(--bg-surface);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: var(--radius-lg);
+      padding: 18px;
       margin-bottom: 14px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+      box-shadow: var(--shadow-card);
+      position: relative;
     }
     .card-title {
       font-size: 12px;
@@ -1662,107 +1772,324 @@ class ServerDashboard {
       justify-content: space-between;
       align-items: center;
     }
+    .card-subtitle {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
 
-    /* Common Buttons & Inputs */
+    /* Buttons & Form Inputs */
     .btn {
-      background: var(--bg-hover);
+      background: rgba(255, 255, 255, 0.06);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 8px 14px;
-      border-radius: 8px;
-      font-size: 13px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
       font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.15s;
+      transition: all 0.15s ease;
     }
-    .btn:hover { background: rgba(255, 255, 255, 0.1); }
-    .btn-primary { background: linear-gradient(135deg, #1f6feb, #1158c7); border: none; color: #fff; box-shadow: 0 2px 8px rgba(31, 111, 235, 0.35); }
-    .btn-primary:hover { opacity: 0.95; }
-    .btn-success { background: linear-gradient(135deg, #238636, #196c2e); border: none; color: #fff; }
-    .btn-danger { background: #da3633; border: none; color: #fff; }
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--border-hover);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #60a5fa, #2563eb);
+      box-shadow: 0 4px 14px rgba(59, 130, 246, 0.5);
+    }
+    .btn-success {
+      background: linear-gradient(135deg, #10b981, #059669);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+    }
+    .btn-danger {
+      background: linear-gradient(135deg, #f43f5e, #be123c);
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      color: #fff;
+    }
+    .btn-gradient {
+      background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(139, 92, 246, 0.35);
+    }
+    .btn-gradient:hover {
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      box-shadow: 0 4px 16px rgba(139, 92, 246, 0.5);
+    }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+    }
+    .btn-ghost:hover {
+      background: var(--bg-hover);
+      color: var(--text);
+      border-color: var(--border);
+    }
     .input {
-      background: #090d16;
+      background: var(--bg-input);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 8px 12px;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       font-size: 13px;
       outline: none;
       width: 100%;
+      transition: all 0.15s;
     }
-    .input:focus { border-color: var(--border-focus); }
+    .input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
 
-    /* Tab 1: Chat */
+    /* TAB 1: 💬 AGENT CHAT (Cursor & Claude Level) */
     .chat-container {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 16px;
       flex: 1;
-      min-height: 380px;
-      max-height: calc(100vh - 240px);
+      min-height: 420px;
+      max-height: calc(100vh - 290px);
       overflow-y: auto;
-      padding: 4px;
-      margin-bottom: 12px;
+      padding: 6px 4px 16px 4px;
+      margin-bottom: 8px;
     }
     .chat-msg {
-      padding: 12px 16px;
-      border-radius: 12px;
-      font-size: 13px;
+      max-width: 92%;
+      border-radius: var(--radius-md);
+      font-size: 13.5px;
       line-height: 1.6;
       word-break: break-word;
-      max-width: 90%;
+      animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .chat-msg.user {
       align-self: flex-end;
-      background: linear-gradient(135deg, #1f6feb, #135ac5);
-      color: #fff;
-      border-bottom-right-radius: 2px;
+      background: linear-gradient(135deg, rgba(30, 58, 138, 0.32), rgba(37, 99, 235, 0.2));
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #ffffff;
+      border-bottom-right-radius: 4px;
+      padding: 12px 16px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
     }
     .chat-msg.assistant {
       align-self: flex-start;
-      background: var(--bg-card);
+      background: rgba(17, 23, 36, 0.78);
+      backdrop-filter: blur(20px);
       border: 1px solid var(--border);
-      border-bottom-left-radius: 2px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      border-bottom-left-radius: 4px;
+      padding: 14px 18px;
+      box-shadow: var(--shadow-card);
     }
-    .chat-msg pre {
-      background: #090d16;
-      padding: 10px;
+    .chat-msg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      gap: 12px;
+    }
+    .chat-avatar {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 2px 8px;
       border-radius: 6px;
-      overflow-x: auto;
-      margin: 8px 0;
-      position: relative;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      border: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
-    .chat-msg code {
+    .chat-avatar.user {
+      background: rgba(59, 130, 246, 0.25);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.4);
+    }
+    .chat-avatar.assistant {
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.25), rgba(59, 130, 246, 0.25));
+      color: #c4b5fd;
+      border: 1px solid rgba(139, 92, 246, 0.4);
+    }
+    .chat-msg-time {
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .chat-msg-body {
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
+    .typing-cursor {
+      display: inline-block;
+      margin-left: 2px;
+      color: var(--accent);
+      animation: blinkCursor 0.8s infinite;
+      font-weight: 700;
+    }
+    @keyframes blinkCursor {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Premium Code Blocks with Header & Copy Button */
+    .code-block {
+      margin: 12px 0;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #04060b;
+      overflow: hidden;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    }
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 11px;
+    }
+    .code-lang {
+      font-family: var(--font-mono);
+      text-transform: lowercase;
+      color: #94a3b8;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .copy-code-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #cbd5e1;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+    .copy-code-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+    }
+    .copy-code-btn.copied {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: #10b981;
+      color: #10b981;
+    }
+    .code-block pre {
+      padding: 12px 14px;
+      margin: 0;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: #e2e8f0;
+    }
+    .code-block code {
+      font-family: var(--font-mono);
+      background: transparent;
+      padding: 0;
+    }
+    code.inline-code {
       font-family: var(--font-mono);
       font-size: 12px;
       background: rgba(255, 255, 255, 0.08);
-      padding: 2px 4px;
+      padding: 2px 6px;
       border-radius: 4px;
+      color: #93c5fd;
+      border: 1px solid rgba(255, 255, 255, 0.06);
     }
+
+    /* Prompt Suggestion Chips */
     .chat-prompt-chips {
       display: flex;
-      gap: 6px;
+      gap: 8px;
       overflow-x: auto;
-      padding-bottom: 6px;
-      margin-bottom: 8px;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
     }
     .chip {
-      background: var(--bg-hover);
+      background: rgba(255, 255, 255, 0.03);
       border: 1px solid var(--border);
       color: var(--text-muted);
-      font-size: 11px;
-      padding: 4px 10px;
-      border-radius: 16px;
+      font-size: 11.5px;
+      padding: 5px 12px;
+      border-radius: 20px;
       white-space: nowrap;
       cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 5px;
     }
-    .chip:hover { color: var(--text); border-color: var(--accent); }
+    .chip:hover {
+      color: var(--text);
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.08);
+      transform: translateY(-1px);
+    }
+
+    /* Floating Chat Input Box */
+    .chat-floating-bar {
+      background: rgba(14, 19, 31, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.6);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .chat-bar-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+    }
+    .chat-meta-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .chat-model-select {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      outline: none;
+      cursor: pointer;
+    }
+    .chat-preset-tag {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--violet);
+      background: rgba(139, 92, 246, 0.12);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      padding: 2px 7px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
     .chat-bar {
       display: flex;
       gap: 8px;
@@ -1770,87 +2097,471 @@ class ServerDashboard {
     }
     .chat-textarea {
       flex: 1;
-      min-height: 42px;
+      min-height: 44px;
       max-height: 140px;
       resize: none;
       padding: 10px 12px;
-      border-radius: 10px;
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.5;
+      outline: none;
+      transition: all 0.15s;
+    }
+    .chat-textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+    .chat-action-btn {
+      height: 44px;
+      width: 48px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
     }
 
-    /* Tab 2: Presets Grid */
-    .presets-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    /* TAB 2: 🎯 PRESETS (Linear Style) */
+    .presets-filter-bar {
+      display: flex;
       gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
       margin-top: 12px;
     }
-    .preset-card {
-      background: var(--bg-card);
+    .search-input-wrapper {
+      position: relative;
+      flex: 1;
+      min-width: 260px;
+    }
+    .overlay-chips-group {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .overlay-toggle {
+      background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px;
+      color: var(--text-muted);
+      font-size: 11.5px;
+      padding: 5px 10px;
+      border-radius: 20px;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .overlay-toggle:hover {
+      border-color: var(--violet);
+      color: var(--text);
+    }
+    .overlay-toggle.active {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: var(--violet);
+      color: #ffffff;
+      box-shadow: 0 0 12px rgba(139, 92, 246, 0.3);
+    }
+    .overlay-toggle .toggle-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: background 0.15s;
+    }
+    .overlay-toggle.active .toggle-dot {
+      background: var(--violet);
+      box-shadow: 0 0 6px var(--violet);
+    }
+    .presets-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .preset-card {
+      background: var(--bg-surface);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-md);
+      padding: 16px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      transition: all 0.15s ease;
-    }
-    .preset-card:hover { border-color: rgba(88, 166, 255, 0.4); transform: translateY(-2px); }
-    .preset-card.active { border-color: var(--accent); background: rgba(88, 166, 255, 0.05); }
-    .preset-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .preset-name { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-    .preset-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-bottom: 12px; flex: 1; }
-
-    /* Tab 3: Accounts Grid */
-    .slots-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-    .slot-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
       position: relative;
+      cursor: pointer;
     }
-    .slot-card.active { border-color: var(--green); box-shadow: 0 0 12px rgba(46, 160, 67, 0.2); }
-    .slot-badge {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 10px;
-      font-weight: 700;
+    .preset-card:hover {
+      border-color: rgba(139, 92, 246, 0.45);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 16px rgba(139, 92, 246, 0.15);
     }
-    .slot-badge.active { background: rgba(46, 160, 67, 0.2); color: var(--green); border: 1px solid var(--green); }
-    .slot-badge.standby { background: rgba(255, 255, 255, 0.08); color: var(--text-muted); }
-
-    /* Tab 5: Terminal */
-    .terminal-window {
-      background: #040609;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      min-height: 320px;
-      max-height: 480px;
-      overflow-y: auto;
-      color: #7ee787;
-      white-space: pre-wrap;
-      line-height: 1.5;
+    .preset-card.active {
+      border-color: var(--violet);
+      background: rgba(139, 92, 246, 0.08);
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+    .preset-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
       margin-bottom: 10px;
     }
+    .preset-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .preset-icon-box {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .preset-name {
+      font-size: 14.5px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+    .preset-slug {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+    .preset-active-pill {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      padding: 2px 7px;
+      border-radius: 12px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid var(--green);
+      color: var(--green);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .preset-active-pill .active-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+    }
+    .preset-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 14px;
+      flex: 1;
+    }
+    .preset-skills-row {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .skill-chip {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: #cbd5e1;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .skill-chip.more {
+      color: var(--violet);
+      background: rgba(139, 92, 246, 0.1);
+      border-color: rgba(139, 92, 246, 0.25);
+    }
+    .preset-card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .preset-skills-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: #c4b5fd;
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      padding: 2px 8px;
+      border-radius: 12px;
+    }
+    .btn-preset-apply {
+      padding: 5px 12px;
+      font-size: 11.5px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+    }
+    .btn-preset-apply:hover {
+      background: linear-gradient(135deg, #8b5cf6, #6366f1);
+      border-color: transparent;
+      color: #fff;
+    }
+    .btn-preset-current {
+      padding: 5px 12px;
+      font-size: 11.5px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid var(--green);
+      border-radius: 6px;
+      color: var(--green);
+    }
 
-    /* Modal / Lock Screen */
+    /* TAB 3: 👥 ACCOUNT CAROUSEL */
+    .slots-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .slot-card {
+      background: var(--bg-surface);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: all 0.2s ease;
+    }
+    .slot-card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-2px);
+    }
+    .slot-card.active {
+      border-color: var(--green);
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      background: rgba(16, 185, 129, 0.04);
+    }
+    .slot-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .slot-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .slot-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+    .slot-badge.active {
+      background: rgba(16, 185, 129, 0.18);
+      color: var(--green);
+      border: 1px solid var(--green);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .slot-badge.standby {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-dim);
+      border: 1px solid var(--border-subtle);
+    }
+    .slot-email {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 14px;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .slot-quota-box {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 14px;
+    }
+    .slot-quota-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10.5px;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+    }
+    .slot-quota-label .quota-rate {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .slot-quota-track {
+      width: 100%;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .slot-quota-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+    .slot-quota-fill.active {
+      background: linear-gradient(90deg, #10b981, #3b82f6);
+    }
+    .slot-quota-fill.standby {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    .btn-slot-switch {
+      width: 100%;
+      font-size: 12px;
+      padding: 7px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .btn-slot-switch:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: var(--border-hover);
+    }
+    .btn-slot-selected {
+      width: 100%;
+      font-size: 12px;
+      padding: 7px;
+      background: rgba(16, 185, 129, 0.18);
+      border: 1px solid var(--green);
+      border-radius: 7px;
+      color: var(--green);
+      font-weight: 600;
+      cursor: default;
+    }
+    .failover-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+      gap: 12px;
+    }
+
+    /* TAB 5: 💻 WEB CONSOLE (Terminal macOS/Linux Window) */
+    .terminal-window-wrapper {
+      background: #040609;
+      border: 1px solid var(--border);
+      border-top: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+      margin-bottom: 12px;
+    }
+    .terminal-titlebar {
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .terminal-dots {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .t-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .t-dot.red { background: #ff5f56; box-shadow: 0 0 6px rgba(255, 95, 86, 0.4); }
+    .t-dot.yellow { background: #ffbd2e; box-shadow: 0 0 6px rgba(255, 189, 46, 0.4); }
+    .t-dot.green { background: #27c93f; box-shadow: 0 0 6px rgba(39, 201, 63, 0.4); }
+    .terminal-title {
+      font-size: 11.5px;
+      font-family: var(--font-mono);
+      color: #94a3b8;
+      letter-spacing: 0.3px;
+    }
+    .terminal-window {
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      min-height: 360px;
+      max-height: 480px;
+      overflow-y: auto;
+      color: #86efac;
+      white-space: pre-wrap;
+      line-height: 1.6;
+      background: transparent;
+    }
+    .terminal-chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .t-chip {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .t-chip:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+      border-color: var(--border-hover);
+    }
+    .terminal-input-bar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .terminal-prompt {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: var(--accent);
+      font-size: 14px;
+      padding-left: 4px;
+    }
+
+    /* Modal / PIN Lock Screen */
     .lock-screen {
       position: fixed;
       inset: 0;
-      background: rgba(9, 13, 22, 0.95);
-      backdrop-filter: blur(24px);
+      background: rgba(6, 8, 14, 0.88);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
       z-index: 1000;
       display: flex;
       align-items: center;
@@ -1858,62 +2569,78 @@ class ServerDashboard {
       padding: 16px;
     }
     .lock-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 28px 24px;
+      background: rgba(15, 20, 32, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-top: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 20px;
+      padding: 32px 26px;
       width: 100%;
-      max-width: 340px;
+      max-width: 350px;
       text-align: center;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(59, 130, 246, 0.15);
+      animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .keypad {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 10px;
-      margin-top: 16px;
+      margin-top: 20px;
     }
     .keypad-btn {
-      background: var(--bg-hover);
-      border: 1px solid var(--border);
-      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #ffffff;
       font-size: 20px;
       font-weight: 600;
       height: 52px;
-      border-radius: 10px;
+      border-radius: 12px;
       cursor: pointer;
+      transition: all 0.12s;
     }
-    .keypad-btn:active { background: rgba(255, 255, 255, 0.15); }
+    .keypad-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .keypad-btn:active {
+      transform: scale(0.96);
+      background: rgba(59, 130, 246, 0.25);
+    }
     .pin-dots {
       display: flex;
       justify-content: center;
-      gap: 10px;
-      margin: 16px 0;
+      gap: 12px;
+      margin: 20px 0;
     }
     .pin-dot {
-      width: 14px;
-      height: 14px;
+      width: 13px;
+      height: 13px;
       border-radius: 50%;
-      border: 2px solid var(--border);
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      transition: all 0.2s ease;
     }
-    .pin-dot.filled { background: var(--accent); border-color: var(--accent); }
-    .shake { animation: shake 0.3s ease-in-out; }
-    @keyframes shake {
+    .pin-dot.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 0 12px var(--accent);
+      transform: scale(1.15);
+    }
+    .shake { animation: shakeCard 0.32s ease-in-out; }
+    @keyframes shakeCard {
       0%, 100% { transform: translateX(0); }
-      20%, 60% { transform: translateX(-8px); }
-      40%, 80% { transform: translateX(8px); }
+      20%, 60% { transform: translateX(-9px); }
+      40%, 80% { transform: translateX(9px); }
     }
   </style>
 </head>
 <body>
 
-  <!-- Top App Header -->
+  <!-- Top Navigation Header -->
   <header>
     <div class="brand">
       <div class="brand-logo">🌌</div>
       <div>
         <span>Antigravity</span>
-        <span style="font-size:10px; color:var(--text-muted); font-weight:normal; margin-left:4px;">Server v3</span>
+        <span class="brand-badge">SERVER 3.0</span>
       </div>
     </div>
 
@@ -1927,38 +2654,35 @@ class ServerDashboard {
       <button class="d-tab-btn" onclick="switchTab('logs')">📜 Логи & Docs</button>
     </div>
 
-    <!-- Right Quick Status Pills -->
+    <!-- Right Status Pills -->
     <div class="header-pills">
-      <div class="pill" id="slotPill" onclick="switchTab('accounts')" title="Активный слот">
+      <div class="pill pill-interactive" id="slotPill" onclick="switchTab('accounts')" title="Активный слот">
         <span>👤</span> <span id="slotPillText">Слот 1</span>
       </div>
-      <div class="pill" id="presetPill" onclick="switchTab('presets')" title="Активный пресет">
+      <div class="pill pill-interactive" id="presetPill" onclick="switchTab('presets')" title="Активный пресет">
         <span id="presetPillIcon">🎭</span> <span id="presetPillText">orchestrator</span>
       </div>
-      <div class="pill" onclick="logout()" title="Заблокировать">
-        <div class="status-dot" id="connDot"></div>
-        <span>🔒</span>
+      <div class="pill pill-interactive" onclick="logout()" title="Заблокировать сессию">
+        <div class="radar-box">
+          <div class="radar-dot" id="connDot"></div>
+          <div class="radar-wave"></div>
+        </div>
+        <span style="font-size:11px; margin-left:2px;">🔒</span>
       </div>
     </div>
   </header>
 
   <!-- TAB 1: 💬 AGENT CHAT -->
   <main class="tab-content active" id="tab-chat">
-    <div class="card" style="margin-bottom:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center;">
-      <div style="display:flex; gap:10px; align-items:center;">
-        <select class="input" id="chatModel" style="width:auto; padding:4px 8px; font-size:12px;">
-          <option value="gemini-2.0-flash">⚡ gemini-2.0-flash</option>
-          <option value="gemini-2.5-pro">🧠 gemini-2.5-pro</option>
-          <option value="gemini-2.0-flash-thinking-exp">🔬 flash-thinking</option>
-        </select>
-        <span style="font-size:12px; color:var(--text-muted);" id="chatWsInfo">📁 ...</span>
-      </div>
-      <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="clearChat()">🗑️ Очистить</button>
-    </div>
-
     <div class="chat-container" id="chatBox">
       <div class="chat-msg assistant">
-        👋 Привет! Я — Google Antigravity Headless Server. Управляй проектом, пресетами и генерацией напрямую с сервера.
+        <div class="chat-msg-header">
+          <span class="chat-avatar assistant">✨ Gemini</span>
+          <span class="chat-msg-time">Ready</span>
+        </div>
+        <div class="chat-msg-body">
+          👋 Привет! Я — Google Antigravity Headless Server. Управляй проектом, пресетами и кодогенерацией напрямую с сервера.
+        </div>
       </div>
     </div>
 
@@ -1969,10 +2693,26 @@ class ServerDashboard {
       <div class="chip" onclick="quickPrompt('Объясни модель владения и жизненных циклов в Rust')">🦀 Rust Ownership</div>
     </div>
 
-    <div class="chat-bar">
-      <textarea class="input chat-textarea" id="chatInput" placeholder="Введите задачу для Gemini (Enter - отправить, Shift+Enter - строка)..." onkeydown="handleChatKey(event)"></textarea>
-      <button class="btn btn-primary" id="chatSendBtn" style="height:42px; width:48px; justify-content:center;" onclick="sendChatMessage()">➤</button>
-      <button class="btn btn-danger" id="chatStopBtn" style="height:42px; display:none;" onclick="stopChatStream()">⏹</button>
+    <div class="chat-floating-bar">
+      <div class="chat-bar-meta">
+        <div class="chat-meta-left">
+          <select class="chat-model-select" id="chatModel">
+            <option value="gemini-2.0-flash">⚡ gemini-2.0-flash (Fast)</option>
+            <option value="gemini-2.5-pro">🧠 gemini-2.5-pro (Deep)</option>
+            <option value="gemini-2.0-flash-thinking-exp">🔬 flash-thinking (CoT)</option>
+          </select>
+          <div class="chat-preset-tag">
+            <span>🎭</span> <span id="chatPresetIndicator">orchestrator</span>
+          </div>
+          <span style="color:var(--text-dim); font-size:11px;" id="chatWsInfo">📁 ...</span>
+        </div>
+        <button class="btn btn-ghost" style="padding:2px 8px; font-size:11px;" onclick="clearChat()">🗑️ Очистить</button>
+      </div>
+      <div class="chat-bar">
+        <textarea class="chat-textarea" id="chatInput" placeholder="Введите задачу для Gemini (Enter - отправить, Shift+Enter - строка)..." onkeydown="handleChatKey(event)"></textarea>
+        <button class="btn btn-primary chat-action-btn" id="chatSendBtn" onclick="sendChatMessage()" title="Отправить сообщение">➤</button>
+        <button class="btn btn-danger chat-action-btn" id="chatStopBtn" style="display:none;" onclick="stopChatStream()" title="Остановить генерацию">⏹</button>
+      </div>
     </div>
   </main>
 
@@ -1981,17 +2721,19 @@ class ServerDashboard {
     <div class="card">
       <div class="card-title">
         <span>Активный пресет проекта</span>
-        <span class="pill" id="activePresetBadge" style="color:var(--accent);">🎭 orchestrator</span>
+        <span class="pill" id="activePresetBadge" style="color:var(--violet); border-color:rgba(139, 92, 246, 0.4);">🎭 orchestrator</span>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+      <p class="card-subtitle">
         Выберите пресет для загрузки специализированного набора навыков и системного контекста в текущий воркспейс.
       </p>
-      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-        <input type="text" class="input" id="presetSearch" placeholder="🔍 Поиск пресетов и навыков..." oninput="filterPresets()" style="max-width:320px;">
-        <div style="display:flex; gap:6px; flex-wrap:wrap;" id="overlayChips">
-          <span class="chip" onclick="toggleOverlay(this, '+qa')">+qa</span>
-          <span class="chip" onclick="toggleOverlay(this, '+devops')">+devops</span>
-          <span class="chip" onclick="toggleOverlay(this, '+docker')">+docker</span>
+      <div class="presets-filter-bar">
+        <div class="search-input-wrapper">
+          <input type="text" class="input" id="presetSearch" placeholder="🔍 Поиск пресетов и навыков..." oninput="filterPresets()">
+        </div>
+        <div class="overlay-chips-group" id="overlayChips">
+          <span class="overlay-toggle" onclick="toggleOverlay(this, '+qa')"><span class="toggle-dot"></span>+qa</span>
+          <span class="overlay-toggle" onclick="toggleOverlay(this, '+devops')"><span class="toggle-dot"></span>+devops</span>
+          <span class="overlay-toggle" onclick="toggleOverlay(this, '+docker')"><span class="toggle-dot"></span>+docker</span>
         </div>
       </div>
     </div>
@@ -2006,17 +2748,20 @@ class ServerDashboard {
     <div class="card">
       <div class="card-title">
         <span>Карусель Google аккаунтов (Multi-Account Carousel)</span>
-        <button class="btn btn-primary" onclick="rotateSlot()">🔄 Ротация слота</button>
+        <button class="btn btn-gradient" onclick="rotateSlot()">🔄 Ротация слота</button>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+      <p class="card-subtitle">
         Автономный пул учетных записей Antigravity с защитой от 429 ResourceExhausted и ротацией токенов.
       </p>
       <div class="slots-grid" id="slotsContainer">
         <!-- Generated via JS -->
       </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:12px;">
-        <span style="font-size:13px;">Автоматический переход при 429 (Auto-Failover):</span>
-        <button class="btn" id="btnToggleFailover" onclick="toggleFailover()">Включен (ON)</button>
+      <div class="failover-bar">
+        <div>
+          <div style="font-size:13px; font-weight:600;">Автоматический переход при 429 (Auto-Failover):</div>
+          <div style="font-size:11px; color:var(--text-muted);">Переключение на резервный слот при исчерпании лимитов</div>
+        </div>
+        <button class="btn btn-success" id="btnToggleFailover" onclick="toggleFailover()">Включен (ON)</button>
       </div>
     </div>
   </main>
@@ -2034,12 +2779,12 @@ class ServerDashboard {
 
     <div class="card">
       <div class="card-title">Инициализация проекта (.agy/config.json)</div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+      <p class="card-subtitle">
         Привяжите слот аккаунта и профиль пресета к директории (команда agy project init).
       </p>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+      <div style="grid-template-columns:1fr 1fr; display:grid; gap:10px; margin-bottom:14px;">
         <div>
-          <label style="font-size:11px; color:var(--text-muted);">Привязать слот:</label>
+          <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">Привязать слот:</label>
           <select class="input" id="initSlotSelect">
             <option value="1">Слот 1</option>
             <option value="2">Слот 2</option>
@@ -2048,7 +2793,7 @@ class ServerDashboard {
           </select>
         </div>
         <div>
-          <label style="font-size:11px; color:var(--text-muted);">Базовый пресет:</label>
+          <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">Базовый пресет:</label>
           <select class="input" id="initPresetSelect"></select>
         </div>
       </div>
@@ -2057,7 +2802,7 @@ class ServerDashboard {
 
     <div class="card">
       <div class="card-title">Недавние проекты на сервере</div>
-      <div id="recentWorkspacesList" style="display:flex; flex-direction:column; gap:6px;">
+      <div id="recentWorkspacesList" style="display:flex; flex-direction:column; gap:8px;">
         <!-- Recent paths -->
       </div>
     </div>
@@ -2065,22 +2810,34 @@ class ServerDashboard {
 
   <!-- TAB 5: 💻 WEB CONSOLE -->
   <main class="tab-content" id="tab-terminal">
-    <div class="card" style="padding:10px 14px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="execCommand('agy preset current')">agy preset current</button>
-        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="execCommand('agy account status')">agy account status</button>
-        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="execCommand('agy daemon status')">agy daemon status</button>
-        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="execCommand('git status -s')">git status</button>
+    <div class="card" style="padding:10px 14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+      <div class="terminal-chips">
+        <button class="t-chip" onclick="execCommand('agy preset current')">agy preset current</button>
+        <button class="t-chip" onclick="execCommand('agy account status')">agy account status</button>
+        <button class="t-chip" onclick="execCommand('agy daemon status')">agy daemon status</button>
+        <button class="t-chip" onclick="execCommand('git status -s')">git status</button>
       </div>
-      <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="clearTerminal()">Очистить</button>
+      <button class="btn btn-ghost" style="padding:4px 8px; font-size:11px;" onclick="clearTerminal()">Очистить</button>
     </div>
 
-    <div class="terminal-window" id="terminalBox">Antigravity Web Console [v3.0.0]
+    <div class="terminal-window-wrapper">
+      <div class="terminal-titlebar">
+        <div class="terminal-dots">
+          <span class="t-dot red" title="Закрыть"></span>
+          <span class="t-dot yellow" title="Свернуть"></span>
+          <span class="t-dot green" title="Развернуть"></span>
+        </div>
+        <div class="terminal-title">antigravity@server: ~ (bash / ps)</div>
+        <div style="font-size:10px; font-family:var(--font-mono); color:var(--text-dim);">v3.0.0</div>
+      </div>
+      <div class="terminal-window" id="terminalBox">Antigravity Web Console [v3.0.0]
 Готов к выполнению CLI команд в контексте сервера.
 </div>
+    </div>
 
-    <div style="display:flex; gap:8px;">
-      <input type="text" class="input" id="terminalInput" placeholder="Введите команду (например: agy preset switch web)..." onkeydown="handleTerminalKey(event)" style="font-family:var(--font-mono); font-size:12px;">
+    <div class="terminal-input-bar">
+      <div class="terminal-prompt">$</div>
+      <input type="text" class="input" id="terminalInput" placeholder="Введите команду (например: agy preset switch web)..." onkeydown="handleTerminalKey(event)" style="font-family:var(--font-mono); font-size:12.5px;">
       <button class="btn btn-primary" onclick="runTerminalInput()">Выполнить</button>
     </div>
   </main>
@@ -2089,7 +2846,7 @@ class ServerDashboard {
   <main class="tab-content" id="tab-logs">
     <div style="display:flex; gap:10px; margin-bottom:12px;">
       <button class="btn btn-primary" id="btnSubLogs" onclick="switchLogsSubTab('logs')">📋 Системные логи</button>
-      <button class="btn" id="btnSubDocs" onclick="switchLogsSubTab('docs')">📖 Артефакты Brain (.md)</button>
+      <button class="btn btn-ghost" id="btnSubDocs" onclick="switchLogsSubTab('docs')">📖 Артефакты Brain (.md)</button>
     </div>
 
     <!-- Logs Subview -->
@@ -2101,13 +2858,15 @@ class ServerDashboard {
             <option value="daemon">agy-daemon</option>
             <option value="language_server">language_server</option>
           </select>
-          <label style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:4px;">
+          <label style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
             <input type="checkbox" id="logAutoRefresh" onchange="toggleLogAutoRefresh()"> Авто-обновление (3s)
           </label>
         </div>
         <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="fetchLogs()">Обновить</button>
       </div>
-      <div class="terminal-window" id="logsBox" style="color:#8b949e; min-height:420px;">Загрузка логов...</div>
+      <div class="terminal-window-wrapper">
+        <div class="terminal-window" id="logsBox" style="color:#94a3b8; min-height:420px;">Загрузка логов...</div>
+      </div>
     </div>
 
     <!-- Docs Subview -->
@@ -2118,7 +2877,7 @@ class ServerDashboard {
           Загрузка списка артефактов...
         </div>
         <div class="card-title" id="artifactTitle">Просмотр артефакта</div>
-        <div id="artifactViewer" style="background:#090d16; border:1px solid var(--border); border-radius:8px; padding:14px; max-height:360px; overflow-y:auto; font-size:13px; line-height:1.6;">
+        <div id="artifactViewer" style="background:#090d16; border:1px solid var(--border); border-radius:8px; padding:16px; max-height:400px; overflow-y:auto; font-size:13px; line-height:1.6;">
           Выберите артефакт из списка выше.
         </div>
       </div>
@@ -2150,9 +2909,9 @@ class ServerDashboard {
   <!-- PIN Lock Screen Modal -->
   <div class="lock-screen" id="lockScreen" style="display:none;">
     <div class="lock-card" id="lockCard">
-      <div style="font-size:32px; margin-bottom:8px;">🌌</div>
-      <h2 style="font-size:18px; margin-bottom:4px;">Antigravity Server</h2>
-      <p style="font-size:12px; color:var(--text-muted);">Введите 6-значный PIN-код для входа</p>
+      <div style="font-size:36px; margin-bottom:8px;">🌌</div>
+      <h2 style="font-size:18px; margin-bottom:4px; font-weight:700;">Antigravity Server</h2>
+      <p style="font-size:12px; color:var(--text-muted);">Введите 6-значный PIN-код для разблокировки</p>
 
       <div class="pin-dots">
         <div class="pin-dot" id="dot-0"></div>
@@ -2163,7 +2922,7 @@ class ServerDashboard {
         <div class="pin-dot" id="dot-5"></div>
       </div>
 
-      <div id="authErrorMsg" style="font-size:12px; color:var(--red); min-height:16px; margin-bottom:8px;"></div>
+      <div id="authErrorMsg" style="font-size:12px; color:var(--red); min-height:16px; margin-bottom:8px; font-weight:600;"></div>
 
       <div class="keypad">
         <button class="keypad-btn" onclick="pressKey('1')">1</button>
@@ -2216,7 +2975,8 @@ class ServerDashboard {
         }
         return await res.json();
       } catch (err) {
-        document.getElementById("connDot").classList.add("offline");
+        const dot = document.getElementById("connDot");
+        if (dot) dot.classList.add("offline");
         throw err;
       }
     }
@@ -2253,7 +3013,8 @@ class ServerDashboard {
 
     function hideLockScreen() {
       document.getElementById("lockScreen").style.display = "none";
-      document.getElementById("connDot").classList.remove("offline");
+      const dot = document.getElementById("connDot");
+      if (dot) dot.classList.remove("offline");
     }
 
     function updatePinDots() {
@@ -2301,7 +3062,7 @@ class ServerDashboard {
           initApp();
         } else {
           document.getElementById("lockCard").classList.add("shake");
-          setTimeout(() => document.getElementById("lockCard").classList.remove("shake"), 300);
+          setTimeout(() => document.getElementById("lockCard").classList.remove("shake"), 320);
           document.getElementById("authErrorMsg").innerText = data.error || "Неверный PIN";
           enteredPin = "";
           updatePinDots();
@@ -2318,22 +3079,40 @@ class ServerDashboard {
       showLockScreen("Сессия завершена");
     }
 
+    // Physical Keyboard Listener for PIN
+    window.addEventListener("keydown", (e) => {
+      const lock = document.getElementById("lockScreen");
+      if (!lock || lock.style.display === "none") return;
+      if (e.key >= "0" && e.key <= "9") {
+        pressKey(e.key);
+      } else if (e.key === "Backspace") {
+        backspacePin();
+      } else if (e.key === "Escape" || e.key === "c" || e.key === "C") {
+        clearPin();
+      }
+    });
+
     // Global State Sync
     async function syncState() {
       try {
         const data = await apiRequest("/api/state");
         if (data.ok) {
           appState = data;
-          document.getElementById("connDot").classList.remove("offline");
+          const dot = document.getElementById("connDot");
+          if (dot) dot.classList.remove("offline");
           document.getElementById("slotPillText").innerText = "Слот " + data.activeSlot;
           document.getElementById("presetPillText").innerText = data.activePreset;
           document.getElementById("presetPillIcon").innerText = data.activePresetDetails?.icon || "⚡";
           document.getElementById("activePresetBadge").innerText = (data.activePresetDetails?.icon || "⚡") + " " + data.activePreset;
+          
+          const chatInd = document.getElementById("chatPresetIndicator");
+          if (chatInd) chatInd.innerText = data.activePreset;
+
           if (data.workspace?.name) {
             document.getElementById("chatWsInfo").innerText = "📁 " + data.workspace.name;
             document.getElementById("currentWsInput").value = data.workspace.path || "";
             document.getElementById("wsInspectionInfo").innerHTML =
-              "Статус: " + (data.workspace.hasConfig ? "<span style='color:var(--green);'>Привязан (.agy/config.json)</span>" : "<span style='color:var(--orange);'>Не инициализирован</span>") +
+              "Статус: " + (data.workspace.hasConfig ? "<span style='color:var(--green); font-weight:600;'>Привязан (.agy/config.json)</span>" : "<span style='color:var(--orange); font-weight:600;'>Не инициализирован</span>") +
               " | Активных навыков: " + (data.workspace.skillsCount || 0);
           }
           renderSlots(data);
@@ -2348,13 +3127,30 @@ class ServerDashboard {
       const accounts = state.slots || [];
       cont.innerHTML = accounts.map(acc => {
         const isActive = acc.slot === state.activeSlot;
+        const email = acc.email || ('developer-slot-' + acc.slot + '@server.local');
         return \`
           <div class="slot-card \${isActive ? 'active' : ''}">
-            <span class="slot-badge \${isActive ? 'active' : 'standby'}">\${isActive ? 'ACTIVE' : 'STANDBY'}</span>
-            <div style="font-size:18px; margin-bottom:6px;">👤 [Слот \${acc.slot}]</div>
-            <div style="font-size:13px; font-weight:600; margin-bottom:8px; word-break:break-all;">\${acc.email || 'Account ' + acc.slot}</div>
-            <button class="btn \${isActive ? 'btn-success' : ''}" style="width:100%; font-size:12px;" onclick="rotateSlot(\${acc.slot})">
-              \${isActive ? '✔ Выбран' : 'Переключить на слот'}
+            <div class="slot-card-header">
+              <div class="slot-title">
+                <span>👤</span>
+                <span>Слот \${acc.slot}</span>
+              </div>
+              <span class="slot-badge \${isActive ? 'active' : 'standby'}">
+                \${isActive ? '<span class="active-dot" style="width:6px; height:6px; border-radius:50%; background:var(--green); display:inline-block; box-shadow:0 0 6px var(--green);"></span> ACTIVE' : 'STANDBY'}
+              </span>
+            </div>
+            <div class="slot-email" title="\${email}">\${email}</div>
+            <div class="slot-quota-box">
+              <div class="slot-quota-label">
+                <span>Квота API</span>
+                <span class="quota-rate">\${isActive ? '100% Ready' : 'Резерв'}</span>
+              </div>
+              <div class="slot-quota-track">
+                <div class="slot-quota-fill \${isActive ? 'active' : 'standby'}" style="width: \${isActive ? '100%' : '80%'}"></div>
+              </div>
+            </div>
+            <button class="btn \${isActive ? 'btn-slot-selected' : 'btn-slot-switch'}" onclick="rotateSlot(\${acc.slot})">
+              \${isActive ? '✔ Текущий слот' : 'Переключить на слот'}
             </button>
           </div>
         \`;
@@ -2407,19 +3203,36 @@ class ServerDashboard {
     function renderPresets(list) {
       const cont = document.getElementById("presetsList");
       if (!cont) return;
-      cont.innerHTML = list.map(p => \`
-        <div class="preset-card \${p.isActive ? 'active' : ''}">
-          <div class="preset-header">
-            <div class="preset-name">\${p.icon} \${p.name}</div>
-            \${p.isActive ? '<span class="pill" style="color:var(--green); font-size:10px;">ACTIVE</span>' : ''}
+      cont.innerHTML = list.map(p => {
+        const skillsList = p.skills || [];
+        const skillsChips = skillsList.slice(0, 3).map(s => \`<span class="skill-chip">\${s}</span>\`).join("");
+        const moreBadge = skillsList.length > 3 ? \`<span class="skill-chip more">+\${skillsList.length - 3}</span>\` : "";
+        return \`
+          <div class="preset-card \${p.isActive ? 'active' : ''}">
+            <div class="preset-header">
+              <div class="preset-title-group">
+                <div class="preset-icon-box">\${p.icon || '⚡'}</div>
+                <div>
+                  <div class="preset-name">\${p.name}</div>
+                  <div class="preset-slug">\${p.id}</div>
+                </div>
+              </div>
+              \${p.isActive ? '<span class="preset-active-pill"><span class="active-dot"></span>ACTIVE</span>' : ''}
+            </div>
+            <div class="preset-desc">\${p.description}</div>
+            <div class="preset-skills-row">
+              \${skillsChips}
+              \${moreBadge}
+            </div>
+            <div class="preset-card-footer">
+              <span class="preset-skills-badge">\${p.skillsCount} skills</span>
+              <button class="btn \${p.isActive ? 'btn-preset-current' : 'btn-preset-apply'}" onclick="applyPresetClick('\${p.id}')">
+                \${p.isActive ? '✔ Активен' : 'Применить →'}
+              </button>
+            </div>
           </div>
-          <div class="preset-desc">\${p.description}</div>
-          <div style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">🛠️ Навыков: \${p.skillsCount}</div>
-          <button class="btn \${p.isActive ? 'btn-success' : 'btn-primary'}" style="width:100%; font-size:12px;" onclick="applyPresetClick('\${p.id}')">
-            \${p.isActive ? '✔ Текущий пресет' : 'Применить пресет'}
-          </button>
-        </div>
-      \`).join("");
+        \`;
+      }).join("");
     }
 
     function filterPresets() {
@@ -2436,12 +3249,10 @@ class ServerDashboard {
     function toggleOverlay(el, overlay) {
       if (selectedOverlays.has(overlay)) {
         selectedOverlays.delete(overlay);
-        el.style.borderColor = "var(--border)";
-        el.style.color = "var(--text-muted)";
+        el.classList.remove("active");
       } else {
         selectedOverlays.add(overlay);
-        el.style.borderColor = "var(--accent)";
-        el.style.color = "var(--accent)";
+        el.classList.add("active");
       }
     }
 
@@ -2468,12 +3279,12 @@ class ServerDashboard {
           const cont = document.getElementById("recentWorkspacesList");
           if (cont) {
             cont.innerHTML = (data.workspaces || []).map(w => \`
-              <div style="background:var(--bg-hover); padding:8px 12px; border-radius:8px; display:flex; justify-content:space-between; align-items:center;">
+              <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); padding:10px 14px; border-radius:10px; display:flex; justify-content:space-between; align-items:center;">
                 <div>
                   <div style="font-size:13px; font-weight:600;">\${w.name}</div>
-                  <div style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">\${w.path}</div>
+                  <div style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono); margin-top:2px;">\${w.path}</div>
                 </div>
-                <button class="btn" style="font-size:11px; padding:4px 8px;" onclick="selectWorkspacePath('\${w.path.replace(/\\\\/g, '\\\\\\\\')}')">Открыть</button>
+                <button class="btn" style="font-size:11.5px; padding:4px 10px;" onclick="selectWorkspacePath('\${w.path.replace(/\\\\/g, '\\\\\\\\')}')">Открыть</button>
               </div>
             \`).join("");
           }
@@ -2517,10 +3328,21 @@ class ServerDashboard {
       const box = document.getElementById("chatBox");
       const div = document.createElement("div");
       div.className = "chat-msg " + role;
-      div.innerHTML = formatMarkdown(text);
+      const isUser = role === "user";
+      const avatarTag = isUser
+        ? '<span class="chat-avatar user">👤 You</span>'
+        : '<span class="chat-avatar assistant">✨ Gemini</span>';
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      div.innerHTML =
+        '<div class="chat-msg-header">' +
+          avatarTag +
+          '<span class="chat-msg-time">' + timeStr + '</span>' +
+        '</div>' +
+        '<div class="chat-msg-body">' + formatMarkdown(text) + '</div>';
       box.appendChild(div);
       box.scrollTop = box.scrollHeight;
-      return div;
+      return div.querySelector(".chat-msg-body");
     }
 
     function quickPrompt(txt) {
@@ -2536,7 +3358,17 @@ class ServerDashboard {
     }
 
     function clearChat() {
-      document.getElementById("chatBox").innerHTML = "";
+      document.getElementById("chatBox").innerHTML = \`
+        <div class="chat-msg assistant">
+          <div class="chat-msg-header">
+            <span class="chat-avatar assistant">✨ Gemini</span>
+            <span class="chat-msg-time">Ready</span>
+          </div>
+          <div class="chat-msg-body">
+            Контекст диалога очищен. Задайте новую задачу.
+          </div>
+        </div>
+      \`;
     }
 
     async function sendChatMessage() {
@@ -2591,12 +3423,12 @@ class ServerDashboard {
                 const payload = JSON.parse(part.substring(6));
                 if (payload.type === "chunk") {
                   accumulated += payload.text;
-                  assistantMsg.innerHTML = formatMarkdown(accumulated) + '<span style="animation:pulseDot 1s infinite;">▋</span>';
+                  assistantMsg.innerHTML = formatMarkdown(accumulated) + '<span class="typing-cursor">▌</span>';
                   document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight;
                 } else if (payload.type === "done") {
                   assistantMsg.innerHTML = formatMarkdown(payload.fullText || accumulated);
                 } else if (payload.type === "error") {
-                  assistantMsg.innerHTML = '<span style="color:var(--red);">' + payload.error + '</span>';
+                  assistantMsg.innerHTML = '<span style="color:var(--red); font-weight:600;">⚠ ' + payload.error + '</span>';
                 }
               } catch (_) {}
             }
@@ -2604,7 +3436,7 @@ class ServerDashboard {
         }
       } catch (err) {
         if (err.name !== "AbortError") {
-          assistantMsg.innerHTML = '<span style="color:var(--red);">Ошибка соединения: ' + err.message + '</span>';
+          assistantMsg.innerHTML = '<span style="color:var(--red); font-weight:600;">⚠ Ошибка соединения: ' + err.message + '</span>';
         }
       } finally {
         sendBtn.style.display = "flex";
@@ -2619,23 +3451,67 @@ class ServerDashboard {
       }
     }
 
-    // Markdown Formatter (Pure JS, zero CDN dependency)
+    // Markdown Formatter with Code Copy Blocks
     function formatMarkdown(text) {
       if (!text) return "";
       let html = text
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        .replace(/\`\`\`([a-z0-9_-]*)\n([\s\S]*?)\`\`\`/g, (m, lang, code) => {
-          return '<pre><code>' + code.trim() + '</code></pre>';
+        .replace(/\`\`\`([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)\`\`\`/g, (m, lang, code) => {
+          const language = (lang || "code").toLowerCase();
+          return '<div class="code-block">' +
+            '<div class="code-header">' +
+              '<span class="code-lang">' + language + '</span>' +
+              '<button class="copy-code-btn" onclick="copyCode(this)" title="Копировать код">📋 Copy code</button>' +
+            '</div>' +
+            '<pre><code class="language-' + language + '">' + code.trim() + '</code></pre>' +
+          '</div>';
         })
-        .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        .replace(/^### (.*$)/gim, '<h3 style="margin:8px 0 4px; font-size:14px;">$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2 style="margin:10px 0 6px; font-size:15px;">$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1 style="margin:12px 0 8px; font-size:16px;">$1</h1>')
-        .replace(/^\- (.*$)/gim, '• $1<br>')
-        .replace(/\n/g, '<br>');
+        .replace(/\`([^\`]+)\`/g, '<code class="inline-code">$1</code>')
+        .replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>')
+        .replace(/\\*(.*?)\\*/g, '<em>$1</em>')
+        .replace(/^### (.*$)/gim, '<h3 style="margin:8px 0 4px; font-size:14px; font-weight:700; color:#f1f5f9;">$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2 style="margin:10px 0 6px; font-size:15px; font-weight:700; color:#f8fafc;">$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1 style="margin:12px 0 8px; font-size:16.5px; font-weight:700; color:#ffffff;">$1</h1>')
+        .replace(/^\\- (.*$)/gim, '<div style="margin:2px 0; padding-left:4px;">• $1</div>')
+        .replace(/\\n/g, '<br>');
       return html;
+    }
+
+    function copyCode(btn) {
+      const block = btn.closest('.code-block');
+      if (!block) return;
+      const code = block.querySelector('pre code');
+      if (!code) return;
+      const text = code.innerText || code.textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          btn.innerHTML = '✔ Copied!';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.innerHTML = '📋 Copy code';
+            btn.classList.remove('copied');
+          }, 2000);
+        }).catch(() => fallbackCopy(text, btn));
+      } else {
+        fallbackCopy(text, btn);
+      }
+    }
+
+    function fallbackCopy(text, btn) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        btn.innerHTML = '✔ Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.innerHTML = '📋 Copy code';
+          btn.classList.remove('copied');
+        }, 2000);
+      } catch (_) {}
+      document.body.removeChild(ta);
     }
 
     // Terminal Runner
@@ -2699,8 +3575,8 @@ class ServerDashboard {
       const isLogs = sub === "logs";
       document.getElementById("subViewLogs").style.display = isLogs ? "block" : "none";
       document.getElementById("subViewDocs").style.display = isLogs ? "none" : "block";
-      document.getElementById("btnSubLogs").className = isLogs ? "btn btn-primary" : "btn";
-      document.getElementById("btnSubDocs").className = !isLogs ? "btn btn-primary" : "btn";
+      document.getElementById("btnSubLogs").className = isLogs ? "btn btn-primary" : "btn btn-ghost";
+      document.getElementById("btnSubDocs").className = !isLogs ? "btn btn-primary" : "btn btn-ghost";
       if (!isLogs) fetchArtifacts();
     }
 
@@ -2732,16 +3608,16 @@ class ServerDashboard {
         if (data.ok) {
           const cont = document.getElementById("artifactsList");
           if ((data.artifacts || []).length === 0) {
-            cont.innerHTML = "<div style='font-size:12px; color:var(--text-muted);'>Нет сгенерированных артефактов в brain/.</div>";
+            cont.innerHTML = "<div style='font-size:12px; color:var(--text-muted); padding:10px;'>Нет сгенерированных артефактов в brain/.</div>";
             return;
           }
           cont.innerHTML = data.artifacts.map(a => \`
-            <div style="background:var(--bg-hover); padding:8px 12px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="viewArtifact('\${a.cid}', '\${a.name}')">
+            <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); padding:10px 14px; border-radius:10px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="viewArtifact('\${a.cid}', '\${a.name}')">
               <div>
                 <div style="font-size:13px; font-weight:600;">\${a.title}</div>
-                <div style="font-size:11px; color:var(--text-muted);">\${a.name} (\${Math.round(a.size/1024)} KB) • \${a.mtimeFormatted}</div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">\${a.name} (\${Math.round(a.size/1024)} KB) • \${a.mtimeFormatted}</div>
               </div>
-              <button class="btn" style="font-size:11px; padding:3px 8px;">Открыть</button>
+              <button class="btn" style="font-size:11px; padding:3px 10px;">Открыть</button>
             </div>
           \`).join("");
         }

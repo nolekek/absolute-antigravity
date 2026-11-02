@@ -1,5 +1,5 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use clap::Parser;
 use tracing::{error, info, warn};
@@ -10,20 +10,32 @@ use agy_core::log_watcher::LogTailWatcher;
 use agy_core::presets::PresetManager;
 use agy_core::symlink::SymlinkEngine;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "agy-daemon", about = "Background watchdog and IPC server for Antigravity")]
-struct Args {
+pub struct Args {
     #[arg(short, long, help = "Path to language server log file to watch")]
-    log_path: Option<PathBuf>,
+    pub log_path: Option<PathBuf>,
 
     #[arg(short, long, env = "AGY_SOCKET", help = "IPC Pipe / Socket address")]
-    ipc_path: Option<String>,
+    pub ipc_path: Option<String>,
 
     #[arg(long, env = "AGY_SOCKET", help = "Alias for --ipc-path")]
-    socket: Option<String>,
+    pub socket: Option<String>,
 
     #[arg(long, default_value_t = false, help = "Run in foreground")]
-    foreground: bool,
+    pub foreground: bool,
+
+    #[arg(long, default_value_t = false, help = "Disable web server auto-start")]
+    pub no_web: bool,
+
+    #[arg(long, default_value_t = false, help = "Do not open browser automatically")]
+    pub no_open: bool,
+
+    #[arg(long, default_value_t = 51125, env = "AGY_WEB_PORT", help = "Port for web dashboard server")]
+    pub web_port: u16,
+
+    #[arg(long, default_value = "0.0.0.0", env = "AGY_WEB_HOST", help = "Host for web dashboard server")]
+    pub web_host: String,
 }
 
 pub struct DaemonState {
@@ -31,6 +43,9 @@ pub struct DaemonState {
     pub log_path: PathBuf,
     pub watching: bool,
     pub shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    pub web_port: u16,
+    pub web_host: String,
+    pub no_web: bool,
 }
 
 fn get_control_center_config_path() -> Option<PathBuf> {
@@ -76,6 +91,296 @@ fn save_active_preset(preset: &str) {
         if let Ok(data) = serde_json::to_string_pretty(&obj) {
             let _ = std::fs::write(&path, data);
         }
+    }
+}
+
+pub fn find_dashboard_script() -> Option<PathBuf> {
+    // 1. Current working directory and parent hierarchy
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut curr = Some(cwd.as_path());
+        for _ in 0..6 {
+            if let Some(dir) = curr {
+                let p1 = dir.join("scripts").join("server_dashboard.js");
+                if p1.is_file() {
+                    return p1.canonicalize().ok().or(Some(p1));
+                }
+                let p2 = dir.join("server_dashboard.js");
+                if p2.is_file() {
+                    return p2.canonicalize().ok().or(Some(p2));
+                }
+                curr = dir.parent();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 2. Executable location and its ancestor directories
+    if let Ok(exe) = std::env::current_exe() {
+        let mut curr = exe.parent();
+        for _ in 0..7 {
+            if let Some(dir) = curr {
+                let p1 = dir.join("scripts").join("server_dashboard.js");
+                if p1.is_file() {
+                    return p1.canonicalize().ok().or(Some(p1));
+                }
+                let p2 = dir.join("server_dashboard.js");
+                if p2.is_file() {
+                    return p2.canonicalize().ok().or(Some(p2));
+                }
+                curr = dir.parent();
+            } else {
+                break;
+            }
+        }
+    }
+
+    // 3. User home directory ~/.gemini/antigravity/
+    if let Some(home) = agy_core::presets::dirs_home() {
+        let p1 = home.join(".gemini").join("antigravity").join("scripts").join("server_dashboard.js");
+        if p1.is_file() {
+            return Some(p1);
+        }
+        let p2 = home.join(".gemini").join("antigravity").join("server_dashboard.js");
+        if p2.is_file() {
+            return Some(p2);
+        }
+    }
+
+    // 4. System directory /opt/antigravity/
+    let opt1 = PathBuf::from("/opt/antigravity/scripts/server_dashboard.js");
+    if opt1.is_file() {
+        return Some(opt1);
+    }
+    let opt2 = PathBuf::from("/opt/antigravity/server_dashboard.js");
+    if opt2.is_file() {
+        return Some(opt2);
+    }
+
+    None
+}
+
+pub fn read_web_pin() -> Option<String> {
+    if let Some(home) = agy_core::presets::dirs_home() {
+        // 1. Check ~/.gemini/antigravity_server_config.json
+        let server_cfg = home.join(".gemini").join("antigravity_server_config.json");
+        if server_cfg.exists() {
+            if let Ok(content) = std::fs::read_to_string(&server_cfg) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(pin) = val.get("pin").and_then(|v| v.as_str()) {
+                        let trimmed = pin.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check ~/.gemini/antigravity_web_config.json
+        let web_cfg = home.join(".gemini").join("antigravity_web_config.json");
+        if web_cfg.exists() {
+            if let Ok(content) = std::fs::read_to_string(&web_cfg) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(pin) = val.get("pin").and_then(|v| v.as_str()) {
+                        let trimmed = pin.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. /etc/antigravity/web.conf
+    let etc_conf = PathBuf::from("/etc/antigravity/web.conf");
+    if etc_conf.exists() {
+        if let Ok(content) = std::fs::read_to_string(&etc_conf) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') || trimmed.starts_with(';') {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    if k.trim().eq_ignore_ascii_case("PIN") {
+                        let val = v.trim().trim_matches('"').trim_matches('\'').trim();
+                        if !val.is_empty() {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+pub fn has_gui_environment() -> bool {
+    #[cfg(windows)]
+    {
+        true
+    }
+    #[cfg(target_os = "macos")]
+    {
+        true
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok()
+    }
+}
+
+pub fn open_browser(url: &str) {
+    info!("Opening default browser to dashboard: {}", url);
+    #[cfg(windows)]
+    {
+        let res = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn();
+        if let Err(e) = res {
+            warn!("Failed to open default browser via cmd.exe: {}", e);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let res = std::process::Command::new("open")
+            .arg(url)
+            .spawn();
+        if let Err(e) = res {
+            warn!("Failed to open default browser via open: {}", e);
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let res = std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn();
+        if let Err(e) = res {
+            warn!("Failed to open default browser via xdg-open: {}", e);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .output();
+    if let Ok(out) = output {
+        let text = String::from_utf8_lossy(&out.stdout);
+        return text.contains(&pid.to_string()) && !text.contains("No tasks");
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn is_pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn cleanup_stale_web_process() {
+    if let Some(home) = agy_core::presets::dirs_home() {
+        let pid_path = home.join(".gemini").join("antigravity").join("web.pid");
+        if pid_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&pid_path) {
+                if let Ok(pid) = content.trim().parse::<u32>() {
+                    if is_pid_alive(pid) {
+                        info!("Found existing web dashboard process (PID: {}). Terminating stale instance...", pid);
+                        #[cfg(windows)]
+                        {
+                            let _ = std::process::Command::new("taskkill")
+                                .args(["/F", "/T", "/PID", &pid.to_string()])
+                                .output();
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            let _ = std::process::Command::new("kill")
+                                .args(["-9", &pid.to_string()])
+                                .output();
+                        }
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(&pid_path);
+        }
+    }
+}
+
+pub fn spawn_web_server(
+    script_path: &Path,
+    host: &str,
+    port: u16,
+) -> anyhow::Result<std::process::Child> {
+    let node_bin = if cfg!(windows) { "node.exe" } else { "node" };
+
+    let mut cmd = std::process::Command::new(node_bin);
+    cmd.arg(script_path);
+    cmd.arg("--host").arg(host);
+    cmd.arg("--port").arg(port.to_string());
+
+    let log_path = agy_core::presets::dirs_home()
+        .map(|h| h.join(".gemini").join("antigravity").join("web.log"));
+    if let Some(ref lp) = log_path {
+        if let Some(parent) = lp.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(lp) {
+            if let Ok(out_file) = file.try_clone() {
+                cmd.stdout(out_file);
+            }
+            cmd.stderr(file);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let child = cmd.spawn()?;
+    let pid = child.id();
+    info!("Spawned web dashboard process (PID: {}) on {}:{}", pid, host, port);
+
+    if let Some(home) = agy_core::presets::dirs_home() {
+        let pid_path = home.join(".gemini").join("antigravity").join("web.pid");
+        if let Some(parent) = pid_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&pid_path, pid.to_string());
+    }
+
+    Ok(child)
+}
+
+pub fn stop_child_process(mut child: std::process::Child) {
+    let pid = child.id();
+    info!("Shutting down web dashboard process (PID: {})...", pid);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+    }
+
+    if let Some(home) = agy_core::presets::dirs_home() {
+        let pid_path = home.join(".gemini").join("antigravity").join("web.pid");
+        let _ = std::fs::remove_file(pid_path);
     }
 }
 
@@ -239,6 +544,11 @@ async fn dispatch_request(req: IpcRequest, state: &DaemonState) -> IpcResponse {
                 "log_path": state.log_path.display().to_string(),
                 "watching": state.watching,
                 "accounts_count": accounts_count,
+                "web": {
+                    "enabled": !state.no_web,
+                    "host": state.web_host,
+                    "port": state.web_port,
+                }
             }))
             .unwrap()
         }
@@ -359,6 +669,32 @@ async fn run_unix_socket_server(
     Ok(())
 }
 
+#[cfg(unix)]
+async fn wait_for_os_shutdown() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigterm = signal(SignalKind::terminate()).ok();
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received SIGINT / Ctrl-C signal.");
+        }
+        _ = async {
+            if let Some(ref mut s) = sigterm {
+                s.recv().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            info!("Received SIGTERM signal.");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_os_shutdown() {
+    let _ = tokio::signal::ctrl_c().await;
+    info!("Received Ctrl-C signal.");
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -374,6 +710,7 @@ async fn main() -> anyhow::Result<()> {
     // Determine language server log path
     let log_path = args
         .log_path
+        .clone()
         .or_else(LogTailWatcher::discover_default_log_path)
         .unwrap_or_else(|| PathBuf::from("language_server.log"));
 
@@ -386,6 +723,9 @@ async fn main() -> anyhow::Result<()> {
         log_path: log_path.clone(),
         watching: true,
         shutdown_tx: shutdown_tx.clone(),
+        web_port: args.web_port,
+        web_host: args.web_host.clone(),
+        no_web: args.no_web,
     });
 
     // Spawn Log Tail Watcher
@@ -417,6 +757,90 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Web Dashboard Management & Auto-Start
+    let web_child: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
+
+    if !args.no_web {
+        match find_dashboard_script() {
+            Some(script_path) => {
+                info!("Found server dashboard script at: {}", script_path.display());
+                cleanup_stale_web_process();
+                match spawn_web_server(&script_path, &args.web_host, args.web_port) {
+                    Ok(child) => {
+                        *web_child.lock().unwrap() = Some(child);
+
+                        // If auto-open is enabled and GUI is available, open dashboard URL in default browser
+                        if !args.no_open && has_gui_environment() {
+                            let web_port = args.web_port;
+                            tokio::spawn(async move {
+                                // Give server_dashboard a moment to initialize and persist PIN
+                                let mut pin = None;
+                                for _ in 0..30 {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                    if let Some(p) = read_web_pin() {
+                                        pin = Some(p);
+                                        break;
+                                    }
+                                }
+                                let url = match pin {
+                                    Some(ref p) => format!("http://127.0.0.1:{}/?pin={}", web_port, p),
+                                    None => format!("http://127.0.0.1:{}", web_port),
+                                };
+                                open_browser(&url);
+                            });
+                        }
+
+                        // Child process supervisor task
+                        let web_child_monitor = Arc::clone(&web_child);
+                        let mut monitor_rx = shutdown_tx.subscribe();
+                        tokio::spawn(async move {
+                            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000));
+                            loop {
+                                tokio::select! {
+                                    _ = monitor_rx.recv() => {
+                                        break;
+                                    }
+                                    _ = interval.tick() => {
+                                        let mut guard = web_child_monitor.lock().unwrap();
+                                        if let Some(ref mut child) = *guard {
+                                            match child.try_wait() {
+                                                Ok(Some(status)) => {
+                                                    warn!("⚠️ [Web-Supervisor] Web dashboard process exited unexpectedly with status: {:?}", status);
+                                                    if let Some(home) = agy_core::presets::dirs_home() {
+                                                        let pid_path = home.join(".gemini").join("antigravity").join("web.pid");
+                                                        let _ = std::fs::remove_file(pid_path);
+                                                    }
+                                                    *guard = None;
+                                                    break;
+                                                }
+                                                Ok(None) => {}
+                                                Err(e) => {
+                                                    warn!("⚠️ [Web-Supervisor] Error inspecting child process: {}", e);
+                                                    *guard = None;
+                                                    break;
+                                                }
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to spawn web dashboard process: {}", e);
+                    }
+                }
+            }
+            None => {
+                warn!("⚠️ Could not locate scripts/server_dashboard.js. Web dashboard will not be started.");
+            }
+        }
+    } else {
+        info!("Web dashboard auto-start disabled via --no-web flag.");
+    }
+
     // Start IPC server
     let raw_ipc_path = args.socket.or(args.ipc_path).unwrap_or_else(get_default_ipc_path);
     let ipc_path = agy_core::ipc::normalize_ipc_path(&raw_ipc_path);
@@ -430,16 +854,84 @@ async fn main() -> anyhow::Result<()> {
 
     info!("agy-daemon is active and watching for quota triggers and IPC commands.");
 
-    // Wait for shutdown or Ctrl-C
+    // Wait for shutdown signal (OS Ctrl-C / SIGTERM / IPC DaemonStop)
+    let mut shutdown_sub = shutdown_tx.subscribe();
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl-C. Initiating graceful shutdown...");
+        _ = wait_for_os_shutdown() => {
+            info!("OS shutdown signal received. Initiating graceful shutdown...");
             let _ = shutdown_tx.send(());
+        }
+        _ = shutdown_sub.recv() => {
+            info!("IPC DaemonStop shutdown received. Initiating graceful shutdown...");
         }
         _ = ipc_handle => {}
     }
 
     watcher_handle.abort();
+
+    // Terminate managed web server child process
+    if let Some(child) = web_child.lock().unwrap().take() {
+        stop_child_process(child);
+    }
+
     info!("agy-daemon stopped gracefully.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_daemon_args_defaults() {
+        let args = Args::try_parse_from(["agy-daemon"]).expect("Failed to parse default daemon args");
+        assert_eq!(args.foreground, false);
+        assert_eq!(args.no_web, false);
+        assert_eq!(args.no_open, false);
+        assert_eq!(args.web_port, 51125);
+        assert_eq!(args.web_host, "0.0.0.0");
+        assert_eq!(args.log_path, None);
+        assert_eq!(args.ipc_path, None);
+    }
+
+    #[test]
+    fn test_daemon_args_custom_web() {
+        let args = Args::try_parse_from([
+            "agy-daemon",
+            "--no-web",
+            "--no-open",
+            "--web-port", "52000",
+            "--web-host", "127.0.0.1",
+            "--foreground",
+        ]).expect("Failed to parse customized daemon args");
+        assert_eq!(args.foreground, true);
+        assert_eq!(args.no_web, true);
+        assert_eq!(args.no_open, true);
+        assert_eq!(args.web_port, 52000);
+        assert_eq!(args.web_host, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_find_dashboard_script_detects_workspace_file() {
+        let script = find_dashboard_script();
+        assert!(script.is_some(), "Expected to find scripts/server_dashboard.js in workspace");
+        let path = script.unwrap();
+        assert!(path.exists());
+        assert!(path.to_string_lossy().contains("server_dashboard.js"));
+    }
+
+    #[test]
+    fn test_read_web_pin() {
+        let pin = read_web_pin();
+        if let Some(ref p) = pin {
+            assert_eq!(p.len(), 6);
+            assert!(p.chars().all(|c| c.is_ascii_digit()));
+        }
+    }
+
+    #[test]
+    fn test_gui_detection() {
+        #[cfg(windows)]
+        assert!(has_gui_environment());
+    }
 }

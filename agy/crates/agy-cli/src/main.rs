@@ -168,12 +168,20 @@ enum ProjectCommands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug, Clone)]
 enum DaemonCommands {
     /// Start the background daemon
     Start {
         #[arg(long, default_value_t = false, help = "Run in foreground")]
         foreground: bool,
+        #[arg(long, default_value_t = false, help = "Disable web server auto-start")]
+        no_web: bool,
+        #[arg(long, default_value_t = false, help = "Do not open browser automatically")]
+        no_open: bool,
+        #[arg(long, help = "Port for web dashboard server (default: 51125)")]
+        web_port: Option<u16>,
+        #[arg(long, help = "Host for web dashboard server (default: 0.0.0.0)")]
+        web_host: Option<String>,
     },
     /// Stop the background daemon
     Stop,
@@ -684,6 +692,19 @@ fn execute_daemon_status(socket: Option<&str>) -> anyhow::Result<()> {
             if let Some(accs) = data.get("accounts_count").and_then(|v| v.as_u64()) {
                 println!("  Слотов аккаунтов: {}", accs);
             }
+            if let Some(web) = data.get("web") {
+                if web.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    let port = web.get("port").and_then(|v| v.as_u64()).unwrap_or(51125);
+                    let host = web.get("host").and_then(|v| v.as_str()).unwrap_or("0.0.0.0");
+                    let display_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
+                    let (_, pin) = load_web_config_details();
+                    let dash_url = match pin {
+                        Some(ref p) => format!("http://{}:{}/?pin={}", display_host, port, p),
+                        None => format!("http://{}:{}", display_host, port),
+                    };
+                    println!("  🌐 Веб-интерфейс: {}", dash_url.cyan().bold());
+                }
+            }
             println!();
         }
         _ => {
@@ -710,7 +731,14 @@ fn execute_daemon_stop(socket: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn execute_daemon_start(foreground: bool, socket: Option<&str>) -> anyhow::Result<()> {
+fn execute_daemon_start(
+    foreground: bool,
+    no_web: bool,
+    no_open: bool,
+    web_port: Option<u16>,
+    web_host: Option<String>,
+    socket: Option<&str>,
+) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let is_running = rt.block_on(async {
         try_ipc_request(&IpcRequest::DaemonStatus, socket).await.is_some()
@@ -718,6 +746,17 @@ fn execute_daemon_start(foreground: bool, socket: Option<&str>) -> anyhow::Resul
 
     if is_running {
         println!("{} agy-daemon is already running.", "ℹ️".blue());
+        if !no_web {
+            let (cfg_port, pin) = load_web_config_details();
+            let port = web_port.unwrap_or(cfg_port);
+            let host = web_host.as_deref().unwrap_or("127.0.0.1");
+            let display_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
+            let dash_url = match pin {
+                Some(ref p) => format!("http://{}:{}/?pin={}", display_host, port, p),
+                None => format!("http://{}:{}", display_host, port),
+            };
+            println!("  {}  {}", "🌐 Web Dashboard:".bold(), dash_url.cyan().bold());
+        }
         return Ok(());
     }
 
@@ -738,6 +777,18 @@ fn execute_daemon_start(foreground: bool, socket: Option<&str>) -> anyhow::Resul
     let mut cmd = std::process::Command::new(&daemon_bin);
     if let Some(s) = socket {
         cmd.arg("--socket").arg(s);
+    }
+    if no_web {
+        cmd.arg("--no-web");
+    }
+    if no_open {
+        cmd.arg("--no-open");
+    }
+    if let Some(p) = web_port {
+        cmd.arg("--web-port").arg(p.to_string());
+    }
+    if let Some(ref h) = web_host {
+        cmd.arg("--web-host").arg(h);
     }
 
     if foreground {
@@ -775,6 +826,17 @@ fn execute_daemon_start(foreground: bool, socket: Option<&str>) -> anyhow::Resul
 
         if ready {
             println!("{} agy-daemon started successfully!", "✅".green().bold());
+            if !no_web {
+                let (cfg_port, pin) = load_web_config_details();
+                let port = web_port.unwrap_or(cfg_port);
+                let host = web_host.as_deref().unwrap_or("127.0.0.1");
+                let display_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
+                let dash_url = match pin {
+                    Some(ref p) => format!("http://{}:{}/?pin={}", display_host, port, p),
+                    None => format!("http://{}:{}", display_host, port),
+                };
+                println!("  {}  {}", "🌐 Web Dashboard:".bold(), dash_url.cyan().bold());
+            }
         } else {
             println!("{} agy-daemon launched, but IPC did not respond within timeout.", "⚠️".yellow());
         }
@@ -796,15 +858,39 @@ fn load_web_config_details() -> (u16, Option<String>) {
     let mut pin = None;
 
     if let Some(home) = agy_core::presets::dirs_home() {
-        let cfg_path = home.join(".gemini").join("antigravity_web_config.json");
-        if cfg_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+        // 1. Check antigravity_server_config.json
+        let server_cfg = home.join(".gemini").join("antigravity_server_config.json");
+        if server_cfg.exists() {
+            if let Ok(content) = std::fs::read_to_string(&server_cfg) {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(p) = val.get("port").and_then(|v| v.as_u64()) {
                         port = p as u16;
                     }
                     if let Some(p) = val.get("pin").and_then(|v| v.as_str()) {
-                        pin = Some(p.to_string());
+                        let trimmed = p.trim();
+                        if !trimmed.is_empty() {
+                            pin = Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check antigravity_web_config.json
+        if pin.is_none() {
+            let cfg_path = home.join(".gemini").join("antigravity_web_config.json");
+            if cfg_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(p) = val.get("port").and_then(|v| v.as_u64()) {
+                            port = p as u16;
+                        }
+                        if let Some(p) = val.get("pin").and_then(|v| v.as_str()) {
+                            let trimmed = p.trim();
+                            if !trimmed.is_empty() {
+                                pin = Some(trimmed.to_string());
+                            }
+                        }
                     }
                 }
             }
@@ -821,7 +907,7 @@ fn load_web_config_details() -> (u16, Option<String>) {
                 }
                 if let Some((k, v)) = trimmed.split_once('=') {
                     let key = k.trim().to_uppercase();
-                    let val = v.trim().trim_matches('"').trim_matches('\'');
+                    let val = v.trim().trim_matches('"').trim_matches('\'').trim();
                     if key == "PORT" {
                         if let Ok(p) = val.parse::<u16>() {
                             port = p;
@@ -838,38 +924,47 @@ fn load_web_config_details() -> (u16, Option<String>) {
 }
 
 fn find_dashboard_script() -> Option<PathBuf> {
+    // 1. Current working directory and parent hierarchy
     if let Ok(cwd) = std::env::current_dir() {
-        let p1 = cwd.join("scripts").join("server_dashboard.js");
-        if p1.exists() {
-            return Some(p1);
-        }
-        let p2 = cwd.join("server_dashboard.js");
-        if p2.exists() {
-            return Some(p2);
+        let mut curr = Some(cwd.as_path());
+        for _ in 0..6 {
+            if let Some(dir) = curr {
+                let p1 = dir.join("scripts").join("server_dashboard.js");
+                if p1.is_file() {
+                    return p1.canonicalize().ok().or(Some(p1));
+                }
+                let p2 = dir.join("server_dashboard.js");
+                if p2.is_file() {
+                    return p2.canonicalize().ok().or(Some(p2));
+                }
+                curr = dir.parent();
+            } else {
+                break;
+            }
         }
     }
 
+    // 2. Executable location and ancestor directories
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let p = exe_dir.join("scripts").join("server_dashboard.js");
-            if p.exists() {
-                return Some(p);
-            }
-            if let Some(parent) = exe_dir.parent() {
-                let p = parent.join("scripts").join("server_dashboard.js");
-                if p.exists() {
-                    return Some(p);
+        let mut curr = exe.parent();
+        for _ in 0..7 {
+            if let Some(dir) = curr {
+                let p1 = dir.join("scripts").join("server_dashboard.js");
+                if p1.is_file() {
+                    return p1.canonicalize().ok().or(Some(p1));
                 }
-                if let Some(grandparent) = parent.parent() {
-                    let p = grandparent.join("scripts").join("server_dashboard.js");
-                    if p.exists() {
-                        return Some(p);
-                    }
+                let p2 = dir.join("server_dashboard.js");
+                if p2.is_file() {
+                    return p2.canonicalize().ok().or(Some(p2));
                 }
+                curr = dir.parent();
+            } else {
+                break;
             }
         }
     }
 
+    // 3. User home directory ~/.gemini/antigravity/
     if let Some(home) = agy_core::presets::dirs_home() {
         let p = home.join(".gemini").join("antigravity").join("scripts").join("server_dashboard.js");
         if p.exists() {
@@ -1728,8 +1823,14 @@ fn main() -> anyhow::Result<()> {
             DaemonCommands::Stop => {
                 execute_daemon_stop(socket)?;
             }
-            DaemonCommands::Start { foreground } => {
-                execute_daemon_start(foreground, socket)?;
+            DaemonCommands::Start {
+                foreground,
+                no_web,
+                no_open,
+                web_port,
+                web_host,
+            } => {
+                execute_daemon_start(foreground, no_web, no_open, web_port, web_host, socket)?;
             }
         },
         Commands::Web { action } => match action {
@@ -1930,6 +2031,67 @@ mod tests {
                 _ => panic!("Expected WebAction::Status"),
             },
             _ => panic!("Expected Commands::Web"),
+        }
+    }
+
+    #[test]
+    fn test_daemon_start_command_parsing_defaults() {
+        let args = ["agy", "daemon", "start"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy daemon start'");
+        match cli.command {
+            Commands::Daemon { cmd } => match cmd {
+                DaemonCommands::Start {
+                    foreground,
+                    no_web,
+                    no_open,
+                    web_port,
+                    web_host,
+                } => {
+                    assert_eq!(foreground, false);
+                    assert_eq!(no_web, false);
+                    assert_eq!(no_open, false);
+                    assert_eq!(web_port, None);
+                    assert_eq!(web_host, None);
+                }
+                _ => panic!("Expected DaemonCommands::Start"),
+            },
+            _ => panic!("Expected Commands::Daemon"),
+        }
+    }
+
+    #[test]
+    fn test_daemon_start_command_parsing_with_flags() {
+        let args = [
+            "agy",
+            "daemon",
+            "start",
+            "--foreground",
+            "--no-web",
+            "--no-open",
+            "--web-port",
+            "54321",
+            "--web-host",
+            "127.0.0.1",
+        ];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy daemon start with flags'");
+        match cli.command {
+            Commands::Daemon { cmd } => match cmd {
+                DaemonCommands::Start {
+                    foreground,
+                    no_web,
+                    no_open,
+                    web_port,
+                    web_host,
+                } => {
+                    assert_eq!(foreground, true);
+                    assert_eq!(no_web, true);
+                    assert_eq!(no_open, true);
+                    assert_eq!(web_port, Some(54321));
+                    assert_eq!(web_host, Some("127.0.0.1".to_string()));
+                }
+                _ => panic!("Expected DaemonCommands::Start"),
+            },
+            _ => panic!("Expected Commands::Daemon"),
         }
     }
 }
