@@ -25,6 +25,9 @@ desktop.ini
 # Build & Installer artifacts
 build/
 /dist/
+target/
+**/target/
+*.pdb
 build_installer/build/
 build_installer/dist/
 *.spec

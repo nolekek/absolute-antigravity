@@ -1,87 +1,43 @@
 ---
 name: agent-preset-conductor
-description: "MANDATORY GLOBAL META-ORCHESTRATOR. Must be evaluated by the agent on EVERY user request, even without explicit /agent-preset-conductor mention. Determines task domain, switches presets (web, backend, devops, appsec, qa, ai-agents, web-research, reverse-engineering, product, orchestrator, systems, vst3, hardware, media, meta-dev, minimal), and activates the grill-me skill in disputable/ambiguous situations."
+description: "MANDATORY META-ROUTER v3.0: Evaluates every prompt, switches preset or auto-composes hybrid overlay. Never halts user for multi-domain stacks."
 ---
 
-# Agent Preset Conductor & Context Orchestrator
+# Preset Conductor v3.0
 
-Автономный мета-оркестратор динамического управления контекстом.
+Autonomous semantic router for dynamic context optimization.
 
-## ⚡ ПРАВИЛО АВТОМАТИЧЕСКОЙ АКТИВАЦИИ
-> [!IMPORTANT]
-> Агент ОБЯЗАН применять логику `agent-preset-conductor` **на КАЖДЫЙ входящий запрос пользователя**, даже если пользователь не упомянул `/agent-preset-conductor` явно.
-> На старте каждого ответа агент оценивает домен задачи и определяет целевой пресет.
+## ⚡ Routing Protocol
+1. **Eval**: Classify domain from user prompt.
+2. **Badge**: Output `🎯 [Смена пресета: <ID>] Причина: <tech>` (or `🎯 [Гибридный пресет: <base> +<overlay>]`).
+3. **Switch**: Execute `agy preset switch <base> [+overlay]`.
+4. **No-Churn**: Keep preset if tools are already active.
 
----
+## 🔀 Auto-Hybrid Mode (Zero Friction)
+On multi-domain tasks (e.g. Next.js + Playwright, FastAPI + Docker):
+- **NEVER** halt or invoke grill-me for combining tech stacks.
+- Autonomously compose `base +overlay` (e.g. `web +qa`, `backend +devops`) and proceed immediately.
 
-## 🛑 АЛГОРИТМ ПРИНЯТИЯ РЕШЕНИЙ
+## 🛡️ Guardrails
+- **`vst3`**: ONLY audio DSP, JUCE C++, VST/AU plugins. Never browser or generic C++.
+- **`meta-dev`**: ONLY Antigravity repo (`antigravityBUTmultiacc`, `agy`). Never external apps.
+- **`orchestrator`**: ONLY multi-agent fan-out (2+ subagents). Never single-domain.
+- **`grill-me`**: ONLY when functional goals are contradictory or ambiguous.
 
-### ⚡ ЖЕСТКИЙ ПРИОРИТЕТ ДЛЯ VST3 / VST3i (HARD KEYWORD ROUTING)
-> [!IMPORTANT]
-> При обнаружении в запросе пользователя ЛЮБОГО из ключевых маркеров:
-> **`vst3`, `vst3i`, `vst`, `juce`, `audio plugin`, `аудиоплагин`, `dsp плагин`, `синтезатор vst`, `audioplugin`, `vst3 sdk`**:
-> 
-> 1. Агент **ОБЯЗАН БЕЗУСЛОВНО И НЕМЕДЛЕННО** переключиться на пресет `vst3` (`VST3 & Audio DSP Studio`).
-> 2. **ЗАПРЕЩЕНО** путать этот домен с `systems`, `orchestrator` или `web`.
-> 3. **ЗАПРЕЩЕНО** запускать лишние согласования — домен аудиоплагинов однозначен и требует совмещения DSP (C++/JUCE), аудио UI/UX и мультиагентной координации!
-
-### 🛠️ ЖЕСТКИЙ ПРИОРИТЕТ ДЛЯ РАЗРАБОТКИ ЯДРА (ANTIGRAVITY CORE & META-DEV)
-> [!IMPORTANT]
-> При работе над самим Antigravity, его исходниками или инфраструктурой (маркеры: **`asar`, `мультиаккаунт`, `multiacc`, `credhelper`, `skillmanager`, `preload.js`, `languageServer`, `перепакуй`, `repack`, `обнови инсталлятор`, `мета-пресет`**):
-> 
-> 1. Агент **ОБЯЗАН БЕЗУСЛОВНО** переключиться на пресет `meta-dev` (`Antigravity Core & Self-Dev 🛠️`).
-> 2. Использовать специализированный ранбук `antigravity-core-dev` и CLI-инструмент `python scripts/antigravity_dev.py` для автоматизации полного цикла.
-
-### 1. Однозначный домен (Clear Domain)
-Если задача на 100% относится к конкретному стеку технологий (только CI/CD, только API/БД, только Web UI):
-> [!NOTE]
-> **Anti-Single-Subagent Rule**: Если задача монодоменная, НЕ используйте пресет `orchestrator` для запуска одного субагента! Переключайтесь напрямую на специализированный пресет (`devops`, `backend`, `web`, `qa`) и решайте задачу в основном диалоге.
-
-1. Вывести в чат обязательный лаконичный бейдж:
-   `🎯 [Смена пресета: <Имя>] Причина: <технологии и цель задачи>`
-2. Выполнить переключение:
-   `python "%USERPROFILE%\.gemini\config\skills\agent-preset-conductor\scripts\switch.py" <preset_name>`
-3. Дождаться подтверждения и приступать к решению.
-
-### 2. Мультидоменная координация vs Согласование
-* **Спорная ситуация или неясные требования** $\to$ **ВКЛЮЧИТЬ `grill-me`**:
-  Если требования допускают несколько альтернативных путей реализации или выбор пресета неочевиден:
-  1. Объявить в чате: `🎯 [Смена пресета: Согласование] Активирован протокол grill-me для разрешения спорных моментов`
-  2. Запустить интерактивное интервью через `ask_question` (по одному вопросу за раз).
-* **Масштабный проект или параллельный веер (2+ субагента)** $\to$ **Пресет `orchestrator`**:
-  Использовать пресет `orchestrator` ТОЛЬКО тогда, когда требуется декомпозиция на параллельные независимые подзадачи (Concurrent Fan-Out) или кросс-доменная координация команды субагентов.
-> 
-> **Агент ОБЯЗАН немедленно активировать скилл `grill-me`**:
-> 1. Объявить в чате:
->    `🎯 [Смена пресета: Согласование] Активирован протокол grill-me для разрешения спорных моментов`
-> 2. Запустить интерактивное интервью через инструмент `ask_question`.
-> 3. Задавать строго по **одному вопросу за раз**, помещая рекомендованный вариант первым с префиксом `(Recommended)`.
-> 4. После того как пользователь сделает выбор — переключиться на согласованный пресет и продолжить работу.
-
-### 3. Стабильность (No Churn)
-Если текущий активный пресет уже содержит нужные инструменты, или запрос является промежуточным (мелкий вопрос, просмотр файлов), пресет не меняется.
-
----
-
-## 🧭 МАТРИЦА 16 ПРЕСЕТОВ (v2.0)
-| Пресет (`ID`) | Название | Маркеры технологий и задачи | Ключевые скиллы пресета |
-|---|---|---|---|
-| `web` | Web Modern | React, Next.js, Vue, Nuxt, Tailwind v4, CSS, HTML, UI/UX дизайн, frontend-design, Web Vitals, SEO, CRO форм, TanStack Query | `ui-ux-pro-max`, `frontend-design`, `react-best-practices`, `nextjs-fullstack-guru`, `tailwind-v4-master`, `seo-audit`, `form-cro` |
-| `backend` | Backend & DB | PostgreSQL, SQL, базы данных, схемы данных, REST/GraphQL API дизайн, FastAPI, Python backend, Node.js, Go highload, Rust systems | `postgres-dba-optimizer`, `fastapi-async-architect`, `database-design`, `api-design-principles`, `nodejs-best-practices`, `go-highload-services`, `rust-systems-safe` |
-| `devops` | DevOps & Cloud | Docker multi-stage, Kubernetes, GitHub Actions CI/CD, Terraform IaC, AWS Serverless, Helm, инциденты SRE, деплой-процедуры, Observability | `docker-container-master`, `k8s-manifest-generator`, `github-actions-ci-cd`, `terraform-iac-architect`, `incident-responder`, `deployment-procedures`, `aws-serverless` |
-| `appsec` | AppSec & Reversing | OWASP Top-10, аудит уязвимостей, фаззинг API, перехват сетевого трафика (mitmproxy), декомпиляция Electron ASAR, Win32/PowerShell безопасность, автоматизация рабочего стола Windows | `appsec-code-auditor`, `top-web-vulnerabilities`, `api-security-best-practices`, `ethical-hacking-methodology`, `reverse-engineer-electron`, `windows-desktop-control` |
-| `qa` | QA & Testing | Playwright E2E тесты, автоматизация десктопа Windows (Windows-MCP), TDD цикл, исправление тестов, нагрузка k6, Code Review | `playwright-e2e-guru`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `unit-test-synthesizer`, `k6-load-testing-pro` |
-| `ai-agents` | AI & MCP Engineering | Создание MCP серверов (Model Context Protocol), Prompt Engineering, RAG архитектура, управление контекстным окном, LangGraph, оценка агентов | `mcp-builder`, `prompt-engineering`, `rag-implementation`, `context-window-management`, `ai-agents-architect`, `agent-evaluation`, `langgraph` |
-| `web-research` | Web Research & OSINT | Высокоточный веб-поиск (native search), сбор данных, OSINT расследования, аналитика без мусора | `search-specialist`, `deep-research-synthesizer`, `web-scraper-harvester`, `osint-recon-investigator` |
-| `reverse-engineering` | Reverse Engineering & Replica | Полный Clean-Room цикл клонирования приложений + Craft Anything (314 инструментов реверса) + Electron ASAR | `craft-anything`, полная пачка из 11 скиллов `replica-*`, `reverse-engineer-electron` |
-| `product` | Product & Monetization | Стратегия монетизации, тарифы/pricing, юнит-экономика LTV/CAC, карточки товаров, офферы, анализ рынка и конкурентов, CRO | `product-monetization-strategy`, `market-competitor-intelligence`, `ai-product-partner`, `browser`, `search-specialist`, `deep-research-synthesizer`, `replica-entrepreneur`, `replica-brand`, `replica-launch`, `form-cro`, `ui-ux-pro-max`, `seo-audit` |
-| `orchestrator` | Orchestrator & Multi-Agent | Масштабные мультидоменные проекты, координация команды субагентов, параллельная разработка с компиляцией изолированных пресетов | `subagent-orchestrator`, `hierarchical-task-decomposer`, `multi-agent-debate-consensus`, `context-synthesis-reducer`, `ai-agents-architect`, `prompt-engineering`, `langgraph`, `code-review-checklist`, `premortem-redteam` |
-| `systems` | Systems & High-Perf | C++, C, Zig, Rust, ассемблер, RAII, ручное управление памятью, lock-free многопоточность, SIMD, санитайзеры ASan/TSan, CMake/Ninja, низкоуровневая оптимизация и профилирование | `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `rust-systems-safe`, `memory-safety-patterns`, `test-driven-development`, `test-fixing`, `code-review-checklist` |
-| `vst3` | VST3 & Audio DSP Studio | VST3/VST3i плагины, синтезаторы, DSP эффекты, JUCE C++, real-time audio thread safety, кастомный LookAndFeel и аудио UI/UX дизайн | `vst3-dsp-architect`, `audio-plugin-ui-ux`, `cpp-systems-architect`, `systems-lowlevel-perf`, `lockfree-concurrency-patterns`, `subagent-orchestrator`, `hierarchical-task-decomposer`, `test-driven-development`, `test-fixing`, `code-review-checklist` |
-| `hardware` | Hardware & CAD/CAM Studio | САПР, 2D/3D черчение DWG/DXF (CADCraft), параметрическое 3D моделирование SolidWorks/STEP (SolidCraft), PBR материалы (TextureCraft) | `solidcraft-modeling`, `cadcraft-drafting`, `texturecraft-pbr`, `cpp-systems-architect`, `systems-lowlevel-perf` |
-| `media` | Creative Studio & Media Production | Видеомонтаж (FilmCraft), моушн-дизайн VFX (EffectCraft), проявка RAW фото (LightCraft), растр PSD (PhotoCraft), вектор SVG (VectorCraft), UI/UX (FigCraft) | `filmcraft-video`, `effectcraft-vfx`, `lightcraft-photo`, `photocraft-studio`, `vectorcraft-artwork`, `figcraft-design`, `ui-ux-pro-max`, `frontend-design` |
-| `meta-dev` | Antigravity Core & Self-Dev | Внутренняя разработка Antigravity: Electron ASAR сборка/деплой, мультиаккаунт, ранбук `antigravity-core-dev`, тесты и автоматизация | `antigravity-core-dev`, `reverse-engineer-electron`, `win32-powershell-automation`, `windows-desktop-control`, `test-driven-development`, `test-fixing`, `code-review-checklist`, `nodejs-best-practices`, `subagent-orchestrator` |
-| `minimal` | Minimal Context | Свободный диалог, концептуальные обсуждения, задачи без специфики конкретного стека. Максимальная экономия контекста | Только фундаментальные глобальные скиллы качества |
-
-> [!NOTE]
-> Фундаментальные скиллы качества (`grill-me`, `systematic-debugging`, `verification-before-completion`, `concise-planning`) и сам `agent-preset-conductor` **всегда активны** во всех пресетах и никогда не отключаются.
+## 🧭 Presets
+- `web`: Next.js, React, Vue, Tailwind, UI/UX, SEO.
+- `backend`: Postgres, SQL, REST/GraphQL, FastAPI, Node, Go, Redis, Kafka.
+- `devops`: Docker, K8s, GitHub Actions, Terraform, AWS, SRE.
+- `appsec`: OWASP Top-10, pentest, API security, ASAR audit, MITM.
+- `qa`: Playwright E2E, Windows-MCP, TDD, test fixing, k6.
+- `ai-agents`: MCP, RAG, Prompt Eng, LangGraph, evals.
+- `web-research`: Deep search, scraping, OSINT recon.
+- `reverse-engineering`: Clean-room replica, Craft Anything, ASAR.
+- `product`: Monetization, unit economics, offers, CRO, psychometrics.
+- `orchestrator`: Multi-agent DAG, concurrent subagents, synthesis.
+- `systems`: C++20/23, C, Zig, Rust, SIMD, lock-free.
+- `vst3`: JUCE, C++ real-time DSP, VST3/AU plugins, synths.
+- `hardware`: CAD/CAM, SolidCraft 3D, CADCraft DWG, TextureCraft.
+- `media`: FilmCraft, EffectCraft VFX, LightCraft, PhotoCraft, SVG.
+- `meta-dev`: Antigravity core, Electron ASAR, multiacc CLI.
+- `minimal`: Minimal context conversational mode.

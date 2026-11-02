@@ -111,31 +111,15 @@ def patch_language_server(paths):
     return False
 
 def patch_app_asar(paths):
-    asar_path = paths["asar_path"]
-    if not os.path.exists(asar_path):
-        return False
-
+    # Non-destructive check: preserve official app.asar updates without destructive overwrites.
+    # Only ensure unpacked companion assets (e.g. credHelper.py) are present.
     try:
-        with open(asar_path, "rb") as f:
-            header = f.read(2048)
-            f.seek(max(0, os.path.getsize(asar_path) - 100000))
-            tail = f.read()
-
-        is_patched = b"antigravity-multiacc-root" in tail or b"antigravity-multiacc-root" in header
-        if not is_patched:
-            with open(asar_path, "rb") as f:
-                is_patched = b"antigravity-multiacc-root" in f.read()
-
-        if not is_patched and os.path.exists(MASTER_ASAR):
-            print("[Guard] Detected stock app.asar! Restoring multi-account carousel...")
-            shutil.copy2(MASTER_ASAR, asar_path)
-            os.makedirs(paths["unpacked_dist"], exist_ok=True)
-            if os.path.exists(CRED_HELPER_SRC):
-                shutil.copy2(CRED_HELPER_SRC, paths["cred_helper_dest"])
-            print("[Guard] Multi-account carousel restored successfully!")
-            return True
+        os.makedirs(paths["unpacked_dist"], exist_ok=True)
+        if os.path.exists(CRED_HELPER_SRC) and not os.path.exists(paths["cred_helper_dest"]):
+            shutil.copy2(CRED_HELPER_SRC, paths["cred_helper_dest"])
+        return True
     except Exception as e:
-        print(f"[Guard] Warning: Failed to restore app.asar: {e}", file=sys.stderr)
+        print(f"[Guard] Warning: Failed to sync unpacked assets: {e}", file=sys.stderr)
     return False
 
 def launch_antigravity(paths, args=None):

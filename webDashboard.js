@@ -1,12 +1,13 @@
 // webDashboard.js
 // High-performance Mobile LAN Web Dashboard & Full Antigravity Client
-// Bound to 0.0.0.0:51125 with 4-digit PIN authentication.
+// Bound to 127.0.0.1:51125 (or 0.0.0.0 with allowLan: true) with 6-digit PIN authentication.
 
 const http = require("http");
 const url = require("url");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 
 const USER_HOME = process.env.USERPROFILE || process.env.HOME || "";
@@ -14,17 +15,75 @@ const WEB_CONFIG_PATH = path.join(USER_HOME, ".gemini", "antigravity_web_config.
 const BRAIN_DIR = path.join(USER_HOME, ".gemini", "antigravity", "brain");
 
 // ---------------------------------------------------------------------------
+// Rate Limiting (Brute-Force Protection: 5 attempts -> 15 min lock)
+// ---------------------------------------------------------------------------
+const authRateLimitMap = new Map();
+const MAX_AUTH_FAILURES = 5;
+const AUTH_BLOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+function getRequestClientIp(req) {
+    const xff = req.headers["x-forwarded-for"];
+    if (xff && typeof xff === "string") {
+        return xff.split(",")[0].trim();
+    }
+    return req.socket?.remoteAddress || "127.0.0.1";
+}
+
+function checkClientRateLimit(ip) {
+    const record = authRateLimitMap.get(ip);
+    const now = Date.now();
+    if (record && record.blockedUntil && record.blockedUntil > now) {
+        const retryAfter = Math.ceil((record.blockedUntil - now) / 1000);
+        return { blocked: true, retryAfter };
+    }
+    return { blocked: false };
+}
+
+function handleAuthFailure(ip) {
+    const now = Date.now();
+    let record = authRateLimitMap.get(ip);
+    if (!record || (record.blockedUntil && record.blockedUntil <= now)) {
+        record = { count: 0, blockedUntil: 0 };
+    }
+    record.count += 1;
+    if (record.count >= MAX_AUTH_FAILURES) {
+        record.blockedUntil = now + AUTH_BLOCK_DURATION_MS;
+        authRateLimitMap.set(ip, record);
+        return { blocked: true, retryAfter: Math.ceil(AUTH_BLOCK_DURATION_MS / 1000) };
+    }
+    authRateLimitMap.set(ip, record);
+    return { blocked: false, remaining: MAX_AUTH_FAILURES - record.count };
+}
+
+function handleAuthSuccess(ip) {
+    authRateLimitMap.delete(ip);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers & Paths
 // ---------------------------------------------------------------------------
 
+function generateSecurePin() {
+    return String(crypto.randomInt(100000, 1000000));
+}
+
 function loadWebConfig() {
-    let cfg = { port: 51125, pin: "7788", enabled: true };
+    let cfg = { port: 51125, pin: null, allowLan: false, enabled: true };
+    let needsSave = false;
     if (fs.existsSync(WEB_CONFIG_PATH)) {
         try {
             const parsed = JSON.parse(fs.readFileSync(WEB_CONFIG_PATH, "utf-8"));
             cfg = { ...cfg, ...parsed };
         } catch (e) {}
     } else {
+        needsSave = true;
+    }
+    // Remove static "7788" and generate crypto-secure 6-digit random PIN if missing/legacy
+    if (!cfg.pin || cfg.pin === "7788" || typeof cfg.pin !== "string" || !/^\d{6}$/.test(cfg.pin.trim())) {
+        cfg.pin = generateSecurePin();
+        needsSave = true;
+    }
+    if (needsSave) {
         saveWebConfig(cfg);
     }
     return cfg;
@@ -153,6 +212,7 @@ function getConversationHistory(targetCid = null, limit = 40) {
         }
 
         // Fast tail reading: if file > 250KB, only read the last 250KB
+        // Byte-level slicing strictly after newline 0x0A avoids splitting multi-byte UTF-8 sequences
         const maxBytes = 250 * 1024;
         let raw = "";
         if (stat.size <= maxBytes) {
@@ -162,10 +222,11 @@ function getConversationHistory(targetCid = null, limit = 40) {
             const fd = fs.openSync(trPath, "r");
             fs.readSync(fd, buffer, 0, maxBytes, stat.size - maxBytes);
             fs.closeSync(fd);
-            raw = buffer.toString("utf8");
-            const firstNl = raw.indexOf("\n");
-            if (firstNl !== -1) {
-                raw = raw.substring(firstNl + 1);
+            const firstNl = buffer.indexOf(0x0a);
+            if (firstNl !== -1 && firstNl < buffer.length - 1) {
+                raw = buffer.subarray(firstNl + 1).toString("utf8");
+            } else {
+                raw = buffer.toString("utf8");
             }
         }
 
@@ -301,7 +362,51 @@ function getPresetsInfo() {
     }
 }
 
-function applyPresetSafe(presetName) {
+function getAgyCliPath() {
+    const candidates = [
+        path.join(USER_HOME, ".gemini", "antigravity", "bin", "agy.exe"),
+        path.join(USER_HOME, ".gemini", "antigravity", "bin", "agy"),
+        path.join(__dirname, "agy", "target", "release", "agy.exe"),
+        path.join(__dirname, "agy", "target", "release", "agy"),
+        path.join(__dirname, "binaries", "windows-x64", "agy.exe"),
+        path.join(__dirname, "binaries", "linux-x64", "agy"),
+        path.join(process.resourcesPath || "", "bin", "agy.exe")
+    ];
+    for (const c of candidates) {
+        if (c && fs.existsSync(c)) return c;
+    }
+    try {
+        const whichCmd = process.platform === "win32" ? "where.exe" : "which";
+        const res = execFileSync(whichCmd, ["agy"], { encoding: "utf-8", timeout: 1000, windowsHide: true });
+        const firstLine = res.split(/\r?\n/)[0].trim();
+        if (firstLine && fs.existsSync(firstLine)) return firstLine;
+    } catch (_) {}
+    return null;
+}
+
+function applyPresetSafe(presetName, overlays = []) {
+    // 1. High-speed compiled Rust CLI delegation (<5ms response)
+    const agyBin = getAgyCliPath();
+    if (agyBin) {
+        try {
+            const args = ["preset", "switch", presetName];
+            if (Array.isArray(overlays)) {
+                args.push(...overlays.filter(Boolean));
+            } else if (typeof overlays === "string" && overlays.trim()) {
+                args.push(...overlays.trim().split(/\s+/));
+            }
+            const out = execFileSync(agyBin, args, {
+                encoding: "utf-8",
+                timeout: 3000,
+                windowsHide: true
+            });
+            return { ok: true, method: "agy-cli", output: out.trim() };
+        } catch (agyErr) {
+            console.warn("[WebDashboard] agy preset switch failed, falling back to skillManager:", agyErr.message);
+        }
+    }
+
+    // 2. Safe Fallback: skillManager.js
     try {
         try { delete require.cache[require.resolve("./skillManager")]; } catch (_) {}
         const { skillManager } = require("./skillManager");
@@ -339,7 +444,30 @@ class WebDashboardServer {
             const parsedUrl = new URL(req.url, "http://127.0.0.1");
             const pathname = parsedUrl.pathname;
 
-            res.setHeader("Access-Control-Allow-Origin", "*");
+            // Host header check
+            const host = req.headers["host"] || "";
+            if (!this.config.allowLan) {
+                const isLocalHost = /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host.trim());
+                if (!isLocalHost) {
+                    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+                    res.end(JSON.stringify({ ok: false, error: "Forbidden: Localhost access only" }));
+                    return;
+                }
+            }
+
+            // CORS origin check
+            const origin = req.headers["origin"];
+            if (origin) {
+                if (this.config.allowLan) {
+                    res.setHeader("Access-Control-Allow-Origin", origin);
+                } else {
+                    const isLocalOrigin = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin.trim());
+                    if (isLocalOrigin) {
+                        res.setHeader("Access-Control-Allow-Origin", origin);
+                    }
+                }
+                res.setHeader("Vary", "Origin");
+            }
             res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-dashboard-pin, Authorization");
 
@@ -360,10 +488,11 @@ class WebDashboardServer {
             };
 
             const checkAuth = () => {
-                const reqPin = req.headers["x-dashboard-pin"] ||
-                               parsedUrl.searchParams.get("pin") ||
-                               (req.headers["authorization"] ? req.headers["authorization"].replace(/^Bearer\s+/i, "") : null);
-                return reqPin && String(reqPin).trim() === String(this.config.pin).trim();
+                const authHeader = req.headers["authorization"]
+                    ? req.headers["authorization"].replace(/^Bearer\s+/i, "")
+                    : null;
+                const reqPin = req.headers["x-dashboard-pin"] || authHeader;
+                return Boolean(reqPin && String(reqPin).trim() === String(this.config.pin).trim());
             };
 
             // Public Root SPA
@@ -372,17 +501,47 @@ class WebDashboardServer {
                 return;
             }
 
-            // Auth verification endpoint
+            // Auth verification endpoint with Brute-Force Rate Limiting (5 failed attempts -> 15 min lock)
             if (req.method === "POST" && pathname === "/api/auth") {
+                const ip = getRequestClientIp(req);
+                const limitCheck = checkClientRateLimit(ip);
+                if (limitCheck.blocked) {
+                    res.writeHead(429, {
+                        "Content-Type": "application/json; charset=utf-8",
+                        "Retry-After": String(limitCheck.retryAfter)
+                    });
+                    res.end(JSON.stringify({
+                        ok: false,
+                        error: `Слишком много неудачных попыток. IP заблокирован на 15 минут. Повторите через ${limitCheck.retryAfter} сек.`
+                    }));
+                    return;
+                }
+
                 let body = "";
                 req.on("data", c => { body += c; });
                 req.on("end", () => {
                     try {
                         const data = JSON.parse(body || "{}");
                         if (String(data.pin).trim() === String(this.config.pin).trim()) {
+                            handleAuthSuccess(ip);
                             sendJson(200, { ok: true, pin: this.config.pin });
                         } else {
-                            sendJson(401, { ok: false, error: "Неверный PIN-код" });
+                            const failRes = handleAuthFailure(ip);
+                            if (failRes.blocked) {
+                                res.writeHead(429, {
+                                    "Content-Type": "application/json; charset=utf-8",
+                                    "Retry-After": String(failRes.retryAfter)
+                                });
+                                res.end(JSON.stringify({
+                                    ok: false,
+                                    error: "Слишком много неудачных попыток. IP заблокирован на 15 минут."
+                                }));
+                            } else {
+                                sendJson(401, {
+                                    ok: false,
+                                    error: `Неверный PIN-код (осталось попыток: ${failRes.remaining})`
+                                });
+                            }
                         }
                     } catch (e) {
                         sendJson(400, { ok: false, error: e.message });
@@ -393,9 +552,37 @@ class WebDashboardServer {
 
             // All remaining /api/* endpoints require valid PIN
             if (pathname.startsWith("/api/")) {
-                if (!checkAuth()) {
-                    sendJson(401, { ok: false, error: "Требуется авторизация (PIN-код)" });
+                const ip = getRequestClientIp(req);
+                const limitCheck = checkClientRateLimit(ip);
+                if (limitCheck.blocked) {
+                    res.writeHead(429, {
+                        "Content-Type": "application/json; charset=utf-8",
+                        "Retry-After": String(limitCheck.retryAfter)
+                    });
+                    res.end(JSON.stringify({
+                        ok: false,
+                        error: `Слишком много неудачных попыток. IP заблокирован на 15 минут.`
+                    }));
                     return;
+                }
+
+                if (!checkAuth()) {
+                    const failRes = handleAuthFailure(ip);
+                    if (failRes.blocked) {
+                        res.writeHead(429, {
+                            "Content-Type": "application/json; charset=utf-8",
+                            "Retry-After": String(failRes.retryAfter)
+                        });
+                        res.end(JSON.stringify({
+                            ok: false,
+                            error: "Слишком много неудачных попыток. IP заблокирован на 15 минут."
+                        }));
+                    } else {
+                        sendJson(401, { ok: false, error: "Требуется авторизация (PIN-код)" });
+                    }
+                    return;
+                } else {
+                    handleAuthSuccess(ip);
                 }
             }
 
@@ -405,7 +592,8 @@ class WebDashboardServer {
                     ok: true,
                     lanIp: getLanIp(),
                     port: this.config.port,
-                    pin: this.config.pin
+                    pin: this.config.pin,
+                    allowLan: !!this.config.allowLan
                 });
                 return;
             }
@@ -417,12 +605,15 @@ class WebDashboardServer {
                 req.on("end", () => {
                     try {
                         const data = JSON.parse(body || "{}");
-                        if (data.pin && String(data.pin).trim().length === 4) {
+                        if (data.pin && String(data.pin).trim().length === 6 && /^\d{6}$/.test(String(data.pin).trim())) {
                             this.config.pin = String(data.pin).trim();
+                            if (typeof data.allowLan === "boolean") {
+                                this.config.allowLan = data.allowLan;
+                            }
                             saveWebConfig(this.config);
-                            sendJson(200, { ok: true, pin: this.config.pin });
+                            sendJson(200, { ok: true, pin: this.config.pin, allowLan: this.config.allowLan });
                         } else {
-                            sendJson(400, { ok: false, error: "PIN должен состоять из 4 цифр" });
+                            sendJson(400, { ok: false, error: "PIN должен состоять из 6 цифр" });
                         }
                     } catch (e) {
                         sendJson(400, { ok: false, error: e.message });
@@ -575,7 +766,7 @@ class WebDashboardServer {
                             sendJson(400, { ok: false, error: "preset is required" });
                             return;
                         }
-                        const resSwitch = applyPresetSafe(targetPreset);
+                        const resSwitch = applyPresetSafe(targetPreset, data.overlays || []);
                         sendJson(200, { ok: true, activePreset: targetPreset, result: resSwitch });
                     } catch (err) {
                         sendJson(500, { ok: false, error: err.message });
@@ -688,14 +879,15 @@ class WebDashboardServer {
             }
         });
 
+        const bindHost = this.config.allowLan === true ? "0.0.0.0" : "127.0.0.1";
         try {
-            this.server.listen(PORT, "0.0.0.0", () => {
-                const lan = getLanIp();
-                console.log(`[WebDashboard] 📱 Mobile LAN Dashboard active at http://${lan}:${PORT}`);
+            this.server.listen(PORT, bindHost, () => {
+                const hostDisplay = this.config.allowLan === true ? getLanIp() : "127.0.0.1";
+                console.log(`[WebDashboard] 📱 Dashboard active at http://${hostDisplay}:${PORT} (${this.config.allowLan ? "LAN" : "Local-only 127.0.0.1"})`);
             });
             try { this.server.unref(); } catch (_) {}
         } catch (e) {
-            console.error("[WebDashboard] Failed to bind 0.0.0.0:", e);
+            console.error(`[WebDashboard] Failed to bind ${bindHost}:`, e);
         }
     }
 
@@ -1397,13 +1589,15 @@ class WebDashboardServer {
     <div class="pin-card">
       <div style="font-size:32px; margin-bottom:8px;">📱</div>
       <h2 style="font-size:17px; font-weight:700; color:#f0f6fc; margin-bottom:4px;">Antigravity Mobile</h2>
-      <p style="font-size:12px; color:#8b949e;">Введите 4-значный PIN-код</p>
+      <p style="font-size:12px; color:#8b949e;">Введите 6-значный PIN-код</p>
       
       <div class="pin-dots">
         <div class="pin-dot" id="dot0"></div>
         <div class="pin-dot" id="dot1"></div>
         <div class="pin-dot" id="dot2"></div>
         <div class="pin-dot" id="dot3"></div>
+        <div class="pin-dot" id="dot4"></div>
+        <div class="pin-dot" id="dot5"></div>
       </div>
 
       <div class="pin-pad">
@@ -1420,7 +1614,6 @@ class WebDashboardServer {
         <button class="pin-btn" onclick="pressPin('0')">0</button>
         <button class="pin-btn action" onclick="backspacePin()">⌫</button>
       </div>
-      <div style="margin-top:14px; font-size:11px; color:#58a6ff;">По умолчанию: <b>7788</b></div>
     </div>
   </div>
 
@@ -1611,13 +1804,6 @@ class WebDashboardServer {
     let allConversations = [];
     let selectedWorkspaceFilter = "ALL";
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const qPin = urlParams.get("pin");
-    if (qPin && qPin.length === 4) {
-      currentPin = qPin;
-      localStorage.setItem("ag_dashboard_pin", currentPin);
-    }
-
     function showToast(msg) {
       const t = document.getElementById("toast");
       t.textContent = msg;
@@ -1627,18 +1813,20 @@ class WebDashboardServer {
 
     // PIN Authentication
     function updatePinDots() {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 6; i++) {
         const d = document.getElementById("dot" + i);
-        if (i < enteredPin.length) d.classList.add("filled");
-        else d.classList.remove("filled");
+        if (d) {
+          if (i < enteredPin.length) d.classList.add("filled");
+          else d.classList.remove("filled");
+        }
       }
     }
 
     function pressPin(d) {
-      if (enteredPin.length < 4) {
+      if (enteredPin.length < 6) {
         enteredPin += d;
         updatePinDots();
-        if (enteredPin.length === 4) verifyPin(enteredPin);
+        if (enteredPin.length === 6) verifyPin(enteredPin);
       }
     }
     function clearPin() { enteredPin = ""; updatePinDots(); }
@@ -1652,6 +1840,11 @@ class WebDashboardServer {
           body: JSON.stringify({ pin: pinToTest })
         });
         const data = await res.json();
+        if (res.status === 429) {
+          clearPin();
+          showToast("⛔ " + (data.error || "IP заблокирован на 15 минут"));
+          return;
+        }
         if (data.ok) {
           currentPin = pinToTest;
           localStorage.setItem("ag_dashboard_pin", currentPin);
@@ -1676,7 +1869,7 @@ class WebDashboardServer {
       document.getElementById("pinOverlay").style.display = "flex";
     }
 
-    if (currentPin && currentPin.length === 4) {
+    if (currentPin && currentPin.length === 6) {
       document.getElementById("pinOverlay").style.display = "none";
     }
 
@@ -1690,6 +1883,17 @@ class WebDashboardServer {
         body: body ? JSON.stringify(body) : null
       }).then(async r => {
         if (r.status === 401) {
+          logout();
+          throw new Error("Не авторизован");
+        }
+        if (r.status === 429) {
+          const err = await r.json().catch(() => ({}));
+          showToast("⛔ " + (err.error || "Слишком много попыток (429)"));
+          throw new Error("Заблокировано (429)");
+        }
+        return r.json();
+      });
+    }
           logout();
           throw new Error("Не авторизован");
         }
@@ -2248,5 +2452,7 @@ module.exports = {
     getConversationHistory,
     getConversationsList,
     getArtifactsList,
-    getArtifactContent
+    getArtifactContent,
+    applyPresetSafe,
+    getAgyCliPath
 };

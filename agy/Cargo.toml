@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/agy-core",
+    "crates/agy-cli",
+    "crates/agy-daemon",
+]
+resolver = "2"

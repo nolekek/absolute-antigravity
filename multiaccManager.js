@@ -43,7 +43,27 @@ class MultiaccManager {
         const PORT = 51122;
 
         const server = http.createServer(async (req, res) => {
-            res.setHeader("Access-Control-Allow-Origin", "*");
+            // Strict Host validation
+            const host = req.headers["host"] || "";
+            const isLocalHost = /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host.trim());
+            if (!isLocalHost) {
+                res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+                res.end(JSON.stringify({ ok: false, error: "Forbidden: Invalid Host header" }));
+                return;
+            }
+
+            // Strict Origin validation (only 127.0.0.1 and localhost allowed)
+            const origin = req.headers["origin"];
+            if (origin) {
+                const isLocalOrigin = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin.trim());
+                if (!isLocalOrigin) {
+                    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
+                    res.end(JSON.stringify({ ok: false, error: "Forbidden: Invalid Origin header" }));
+                    return;
+                }
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                res.setHeader("Vary", "Origin");
+            }
             res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
@@ -267,26 +287,6 @@ class MultiaccManager {
                     return;
                 }
 
-                if (req.method === "POST" && pathname === "/api/eval") {
-                    let body = "";
-                    req.on("data", chunk => { body += chunk; });
-                    req.on("end", async () => {
-                        try {
-                            const data = JSON.parse(body || "{}");
-                            const wins = BrowserWindow.getAllWindows();
-                            if (wins.length === 0) {
-                                sendJson(500, { ok: false, error: "No window open" });
-                                return;
-                            }
-                            const resEval = await wins[0].webContents.executeJavaScript(data.code);
-                            sendJson(200, { ok: true, result: resEval });
-                        } catch (err) {
-                            sendJson(500, { ok: false, error: err.message });
-                        }
-                    });
-                    return;
-                }
-
                 if (req.method === "POST" && pathname === "/api/inject-prompt") {
                     let body = "";
                     req.on("data", chunk => { body += chunk; });
@@ -308,8 +308,6 @@ class MultiaccManager {
 
                             const win = wins[0];
                             if (win.isMinimized()) win.restore();
-                            win.show();
-                            win.focus();
 
                             if (targetCid) {
                                 win.webContents.send("notification:clicked", { cascadeId: targetCid });
@@ -415,10 +413,6 @@ class MultiaccManager {
                 console.error("[MultiAcc Bridge Error]:", globalErr);
                 sendJson(500, { ok: false, error: globalErr.message });
             }
-        });
-
-        server.on("error", (err) => {
-            console.error("[MultiAcc Bridge Server Error]:", err);
         });
 
         server.on("error", (err) => {
@@ -1008,8 +1002,6 @@ class MultiaccManager {
         }
         const win = wins[0];
         if (win.isMinimized()) win.restore();
-        win.show();
-        win.focus();
 
         if (targetCid) {
             win.webContents.send("notification:clicked", { cascadeId: targetCid });

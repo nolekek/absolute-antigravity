@@ -3,7 +3,8 @@
 Antigravity Tweaks Installer
 Deploys:
   - Multi-Account & Control Center patched app.asar
-  - 70-skill library & workshop (~/.gemini/skills-library & ~/.gemini/config/skills)
+  - 101-skill library & workshop (~/.gemini/skills-library & ~/.gemini/config/skills)
+  - Autonomous Rust CLI core (agy, agy-daemon) & 16 presets (~/.gemini/antigravity/bin & ~/.gemini/config)
   - Helper daemons & scripts (~/.gemini/antigravity/bin)
   - Regional Eligibility Bypass Patch
   - Telegram Remote Commander Config
@@ -33,7 +34,7 @@ def print_banner():
     banner = f"""{Colors.CYAN}{Colors.BOLD}
   ╔═══════════════════════════════════════════════════════════════════╗
   ║              ANTIGRAVITY SUPERCHARGED INSTALLER 🚀                ║
-  ║  Multi-Account · Control Center · 70 Skills · Telegram · Bypass   ║
+  ║  Multi-Account · 16 Presets · 101 Skills · Rust CLI (agy) · Bypass║
   ╚═══════════════════════════════════════════════════════════════════╝{Colors.RESET}
 """
     print(banner)
@@ -45,18 +46,95 @@ def get_payload_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "payload")
 
 def stop_active_processes():
-    proc_name = "Antigravity.exe" if IS_WINDOWS else "Antigravity"
-    print(f"  {Colors.CYAN}• Проверка запущенных процессов {proc_name}...{Colors.RESET}")
+    proc_names = ["Antigravity.exe", "agy.exe", "agy-daemon.exe"] if IS_WINDOWS else ["Antigravity", "agy", "agy-daemon"]
+    print(f"  {Colors.CYAN}• Проверка запущенных процессов ({', '.join(proc_names)})...{Colors.RESET}")
+    for proc_name in proc_names:
+        if IS_WINDOWS:
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", proc_name, "/T"], capture_output=True, check=False)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(["pkill", "-f", proc_name], capture_output=True, check=False)
+            except Exception:
+                pass
+
+def add_to_user_path(directory):
+    if not IS_WINDOWS:
+        return False
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_ALL_ACCESS)
+        try:
+            current_path, _ = winreg.QueryValueEx(key, "PATH")
+        except FileNotFoundError:
+            current_path = ""
+        paths = [p.strip() for p in current_path.split(";") if p.strip()]
+        norm_dir = os.path.normpath(directory)
+        if not any(os.path.normpath(p).lower() == norm_dir.lower() for p in paths):
+            new_path = (current_path + ";" if current_path and not current_path.endswith(";") else current_path) + norm_dir
+            winreg.SetValueEx(key, "PATH", 0, winreg.REG_EXPAND_SZ, new_path)
+            winreg.CloseKey(key)
+            try:
+                import ctypes
+                HWND_BROADCAST = 0xFFFF
+                WM_SETTINGCHANGE = 0x001A
+                SMTO_ABORTIFHUNG = 0x0002
+                result = ctypes.c_ulong()
+                ctypes.windll.user32.SendMessageTimeoutW(
+                    HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+                    SMTO_ABORTIFHUNG, 3000, ctypes.byref(result)
+                )
+            except Exception:
+                pass
+            return True
+        winreg.CloseKey(key)
+        return False
+    except Exception:
+        try:
+            ps_cmd = f'$p = [Environment]::GetEnvironmentVariable("PATH", "User"); if (($p -split ";") -notcontains "{directory}") {{ [Environment]::SetEnvironmentVariable("PATH", $p + ";{directory}", "User") }}'
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, check=False)
+            return True
+        except Exception:
+            return False
+
+def create_dir_link(target, link_path):
+    target = os.path.abspath(target)
+    link_path = os.path.abspath(link_path)
+    if os.path.lexists(link_path):
+        try:
+            if os.path.islink(link_path):
+                os.unlink(link_path)
+            elif os.path.isdir(link_path):
+                shutil.rmtree(link_path)
+            else:
+                os.remove(link_path)
+        except Exception:
+            return False
     if IS_WINDOWS:
         try:
-            subprocess.run(["taskkill", "/F", "/IM", proc_name, "/T"], capture_output=True, check=False)
+            res = subprocess.run(["cmd", "/c", f'mklink /J "{link_path}" "{target}"'], capture_output=True, text=True)
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
+        try:
+            os.symlink(target, link_path, target_is_directory=True)
+            return True
         except Exception:
             pass
     else:
         try:
-            subprocess.run(["pkill", "-f", proc_name], capture_output=True, check=False)
+            os.symlink(target, link_path, target_is_directory=True)
+            return True
         except Exception:
             pass
+    try:
+        shutil.copytree(target, link_path)
+        return True
+    except Exception:
+        return False
 
 def locate_antigravity_paths(custom_path=None):
     user_home = os.path.expanduser("~")
@@ -126,6 +204,7 @@ def locate_antigravity_paths(custom_path=None):
         "unpacked_dist": os.path.join(resources_dir, "app.asar.unpacked", "dist"),
         "gemini_dir": os.path.join(user_home, ".gemini", "antigravity"),
         "gemini_bin": os.path.join(user_home, ".gemini", "antigravity", "bin"),
+        "gemini_config": os.path.join(user_home, ".gemini", "config"),
         "telegram_config": os.path.join(user_home, ".gemini", "antigravity_telegram.json"),
         "user_home": user_home,
     }
@@ -134,20 +213,20 @@ def install_tweaks(custom_path=None):
     print_banner()
 
     # Step 1: Process Safety
-    print(f"\n{Colors.BOLD}[1/5] Проверка запущенных процессов...{Colors.RESET}")
+    print(f"\n{Colors.BOLD}[1/6] Проверка запущенных процессов...{Colors.RESET}")
     stop_active_processes()
     print(f"  {Colors.GREEN}✔ Все процессы готовы к обновлению{Colors.RESET}")
 
     # Step 2: Paths & Directories
-    print(f"\n{Colors.BOLD}[2/5] Определение путей установки...{Colors.RESET}")
+    print(f"\n{Colors.BOLD}[2/6] Определение путей установки...{Colors.RESET}")
     paths = locate_antigravity_paths(custom_path=custom_path)
     print(f"  {Colors.DIM}Клиент Antigravity:{Colors.RESET} {paths['program_dir']}")
-    print(f"  {Colors.DIM}Системная папка твиков:{Colors.RESET} {paths['gemini_bin']}")
+    print(f"  {Colors.DIM}Системная папка бинарников:{Colors.RESET} {paths['gemini_bin']}")
 
     payload_dir = get_payload_dir()
 
-    # Step 3: Backup existing app.asar & deploy UI modifications
-    print(f"\n{Colors.BOLD}[3/5] Развёртывание компонентов и твиков UI...{Colors.RESET}")
+    # Step 3: Backup existing app.asar & deploy UI modifications & Rust CLI binaries
+    print(f"\n{Colors.BOLD}[3/6] Развёртывание компонентов, Rust CLI ядра и твиков UI...{Colors.RESET}")
     if os.path.exists(paths['asar_path']):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_name = f"app.asar.backup_{timestamp}"
@@ -183,20 +262,45 @@ def install_tweaks(custom_path=None):
     master_asar = os.path.join(paths['gemini_bin'], "app.asar.patched_master")
     shutil.copy2(paths['asar_path'], master_asar)
 
-    # Copy scripts to bin
-    for script_name in ["credHelper.py", "antigravity_bot.py", "antigravity_guard.py", "launch.vbs", "agentapi.bat", "manager.py"]:
-        src = os.path.join(payload_dir, script_name)
+    # Copy Rust CLI binaries (agy, agy-daemon) and service scripts to bin
+    bin_items = [
+        "agy.exe", "agy-daemon.exe", "agy", "agy-daemon",
+        "credHelper.py", "antigravity_bot.py", "antigravity_guard.py",
+        "launch.vbs", "agentapi.bat", "manager.py"
+    ]
+    for item_name in bin_items:
+        src = os.path.join(payload_dir, item_name)
         if os.path.exists(src):
-            dst = os.path.join(paths['gemini_bin'], script_name)
+            dst = os.path.join(paths['gemini_bin'], item_name)
             shutil.copy2(src, dst)
+            if not IS_WINDOWS:
+                try:
+                    os.chmod(dst, 0o755)
+                except Exception:
+                    pass
 
-    print(f"  {Colors.GREEN}✔ Служебные скрипты и демоны развернуты в ~/.gemini/antigravity/bin/{Colors.RESET}")
+    print(f"  {Colors.GREEN}✔ Автономные бинарники Rust CLI (agy, agy-daemon) и скрипты развернуты в ~/.gemini/antigravity/bin/{Colors.RESET}")
 
-    # Step 3b: Deploy Skills Workshop & Library
+    # Deploy presets.yaml configuration
+    presets_src = os.path.join(payload_dir, "presets.yaml")
+    if os.path.exists(presets_src):
+        os.makedirs(paths['gemini_config'], exist_ok=True)
+        shutil.copy2(presets_src, os.path.join(paths['gemini_config'], "presets.yaml"))
+        shutil.copy2(presets_src, os.path.join(paths['gemini_bin'], "presets.yaml"))
+        print(f"  {Colors.GREEN}✔ Конфигурация 16 пресетов (presets.yaml) развернута в ~/.gemini/config/{Colors.RESET}")
+
+    # Register ~/.gemini/antigravity/bin in User PATH
+    if add_to_user_path(paths['gemini_bin']):
+        print(f"  {Colors.GREEN}✔ ~/.gemini/antigravity/bin добавлен в системный PATH (команда agy доступна глобально){Colors.RESET}")
+    else:
+        print(f"  {Colors.DIM}• ~/.gemini/antigravity/bin уже присутствует в системном PATH{Colors.RESET}")
+
+    # Step 4: Deploy Skills Workshop & Library (101 skills, 16 presets)
+    print(f"\n{Colors.BOLD}[4/6] Развёртывание каталога навыков (101 навык, 16 пресетов)...{Colors.RESET}")
     skills_tar = os.path.join(payload_dir, "skills_library.tar.gz")
     if os.path.exists(skills_tar):
         try:
-            print(f"  {Colors.CYAN}• Развертывание каталога скиллов (70 специализированных навыков)...{Colors.RESET}")
+            print(f"  {Colors.CYAN}• Распаковка библиотеки скиллов в ~/.gemini/skills-library...{Colors.RESET}")
             gemini_root = os.path.join(paths['user_home'], ".gemini")
             with tarfile.open(skills_tar, "r:gz") as tar:
                 tar.extractall(path=gemini_root)
@@ -204,13 +308,27 @@ def install_tweaks(custom_path=None):
             lib_dir = os.path.join(gemini_root, "skills-library")
             cfg_skills_dir = os.path.join(gemini_root, "config", "skills")
             os.makedirs(cfg_skills_dir, exist_ok=True)
-            for item in os.listdir(lib_dir):
-                s_src = os.path.join(lib_dir, item)
-                s_dst = os.path.join(cfg_skills_dir, item)
-                if os.path.isdir(s_src) and not os.path.exists(s_dst):
-                    shutil.copytree(s_src, s_dst)
 
-            print(f"  {Colors.GREEN}✔ Библиотека навыков и Control Center Workshop успешно установлены!{Colors.RESET}")
+            # Synchronize active preset symlinks via agy CLI
+            agy_bin = os.path.join(paths['gemini_bin'], "agy.exe" if IS_WINDOWS else "agy")
+            synced_via_cli = False
+            if os.path.exists(agy_bin):
+                try:
+                    res = subprocess.run([agy_bin, "preset", "switch", "orchestrator"], capture_output=True, text=True, timeout=10)
+                    if res.returncode == 0:
+                        print(f"  {Colors.GREEN}✔ Симлинки пресета оркестратора успешно синхронизированы через agy core!{Colors.RESET}")
+                        synced_via_cli = True
+                except Exception:
+                    pass
+
+            if not synced_via_cli and os.path.exists(lib_dir):
+                for item in os.listdir(lib_dir):
+                    s_src = os.path.join(lib_dir, item)
+                    s_dst = os.path.join(cfg_skills_dir, item)
+                    if os.path.isdir(s_src) and not os.path.exists(s_dst):
+                        create_dir_link(s_src, s_dst)
+
+            print(f"  {Colors.GREEN}✔ Библиотека навыков (101 навык) и Control Center Workshop успешно установлены!{Colors.RESET}")
 
             # Deploy agent-orchestrator user rules
             plugin_src = os.path.join(payload_dir, "agent-orchestrator")
@@ -255,8 +373,8 @@ def install_tweaks(custom_path=None):
         except Exception as e:
             print(f"  {Colors.YELLOW}[!] Предупреждение при распаковке навыков: {e}{Colors.RESET}")
 
-    # Step 4: Apply Eligibility Patcher (Region Gate Bypass)
-    print(f"\n{Colors.BOLD}[4/5] Применение патча региональных ограничений (eligibility bypass)...{Colors.RESET}")
+    # Step 5: Apply Eligibility Patcher (Region Gate Bypass)
+    print(f"\n{Colors.BOLD}[5/6] Применение патча региональных ограничений (eligibility bypass)...{Colors.RESET}")
     manager_path = os.path.join(payload_dir, "manager.py")
     if os.path.exists(manager_path):
         try:
@@ -281,8 +399,8 @@ def install_tweaks(custom_path=None):
             except Exception as e2:
                 print(f"  {Colors.RED}[!] Ошибка вызова manager.py: {e2}{Colors.RESET}")
 
-    # Step 5: Telegram Bot Configuration
-    print(f"\n{Colors.BOLD}[5/5] Конфигурация Telegram Remote Commander...{Colors.RESET}")
+    # Step 6: Telegram Bot Configuration
+    print(f"\n{Colors.BOLD}[6/6] Конфигурация Telegram Remote Commander...{Colors.RESET}")
     cfg_path = paths['telegram_config']
     existing_cfg = False
     if os.path.exists(cfg_path):
@@ -308,10 +426,11 @@ def install_tweaks(custom_path=None):
   1. 🔓 {Colors.CYAN}Обход геолокации:{Colors.RESET} сняты региональные ограничения в CLI, Manager и IDE.
   2. 👥 {Colors.CYAN}Мульти-аккаунты:{Colors.RESET} панель переключения аккаунтов добавлена в окно.
   3. 📱 {Colors.CYAN}Мобильный Веб-Клиент:{Colors.RESET} LAN-панель на порту 51125 (чаты, квоты, артефакты).
-  4. 🎛️ {Colors.CYAN}Control Center & Skills:{Colors.RESET} 14 сфокусированных пресетов и 70 навыков.
-  4. 🔌 {Colors.CYAN}Локальный мост:{Colors.RESET} поднят защищённый IPC-сервер http://127.0.0.1:51122.
-  5. 🤖 {Colors.CYAN}Telegram Commander:{Colors.RESET} бот с квотами и историей готов в ~/.gemini/antigravity/bin/.
-  6. 🛡️ {Colors.CYAN}Авто-защита:{Colors.RESET} сторожевой скрипт предотвратит сброс твиков при обновлениях.
+  4. 🎛️ {Colors.CYAN}Control Center & Skills:{Colors.RESET} 16 сфокусированных пресетов и 101 специализированный навык.
+  5. ⚡ {Colors.CYAN}Rust CLI ядро (agy):{Colors.RESET} мгновенное переключение пресетов за мс, ротация карусели аккаунтов, watchdog демон.
+  6. 🔌 {Colors.CYAN}Локальный мост:{Colors.RESET} поднят защищённый IPC-сервер http://127.0.0.1:51122.
+  7. 🤖 {Colors.CYAN}Telegram Commander:{Colors.RESET} бот с квотами и историей готов в ~/.gemini/antigravity/bin/.
+  8. 🛡️ {Colors.CYAN}Авто-защита:{Colors.RESET} сторожевой скрипт предотвратит сброс твиков при обновлениях.
 """)
 
 if __name__ == "__main__":

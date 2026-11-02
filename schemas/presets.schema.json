@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://antigravity.dev/schemas/presets.schema.json",
+  "title": "Antigravity Presets Manifest Schema",
+  "description": "Validation schema for presets.yaml (v3.0) Single Source of Truth",
+  "type": "object",
+  "required": [
+    "version",
+    "always_active",
+    "presets",
+    "hybrid_rules"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^3\\.\\d+$",
+      "description": "Schema version (must be 3.x)"
+    },
+    "always_active": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "minItems": 1,
+      "description": "Permanent foundational skills active across all presets"
+    },
+    "presets": {
+      "type": "object",
+      "description": "Map of all 16 focused domain presets",
+      "required": [
+        "web",
+        "backend",
+        "devops",
+        "appsec",
+        "qa",
+        "ai-agents",
+        "web-research",
+        "reverse-engineering",
+        "product",
+        "orchestrator",
+        "systems",
+        "vst3",
+        "hardware",
+        "media",
+        "meta-dev",
+        "minimal"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "name",
+          "icon",
+          "description",
+          "skills"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "icon": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "adjacent_presets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "hybrid_rules": {
+      "type": "array",
+      "description": "Declarative rules for automatic multi-domain preset composition",
+      "items": {
+        "type": "object",
+        "required": [
+          "trigger",
+          "compose"
+        ],
+        "properties": {
+          "trigger": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "compose": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

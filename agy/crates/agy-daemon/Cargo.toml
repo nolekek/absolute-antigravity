@@ -1,0 +1,20 @@
+[package]
+name = "agy-daemon"
+version = "3.0.0"
+edition = "2021"
+authors = ["Antigravity Core Team"]
+description = "Background watchdog and IPC server daemon for Absolute Antigravity"
+
+[[bin]]
+name = "agy-daemon"
+path = "src/main.rs"
+
+[dependencies]
+agy-core = { path = "../agy-core" }
+tokio = { version = "1.38", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"

@@ -35,16 +35,15 @@ class ExclusiveHTTPServer(HTTPServer):
     allow_reuse_address = False
 
 class BotControlHandler(BaseHTTPRequestHandler):
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
     def do_GET(self):
+        # Strict Host check
+        host = self.headers.get('Host', '')
+        if not (host.startswith('127.0.0.1') or host.startswith('localhost')):
+            self.send_response(403)
+            self.end_headers()
+            return
+
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         data = {
@@ -55,15 +54,11 @@ class BotControlHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode('utf-8'))
 
     def do_POST(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        # Open unauthenticated shutdown is disabled to eliminate remote DoS
+        self.send_response(405)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        self.wfile.write(b'{"ok": true, "message": "shutting down"}')
-        def shutdown_bot():
-            time.sleep(0.3)
-            os._exit(0)
-        threading.Thread(target=shutdown_bot, daemon=True).start()
+        self.wfile.write(b'{"ok": false, "error": "Method Not Allowed"}')
 
     def log_message(self, format, *args):
         pass
@@ -83,13 +78,6 @@ def acquire_instance_lock():
 
 
 def kill_other_bot_instances():
-    try:
-        req = urllib.request.Request("http://127.0.0.1:51123/stop", data=b"{}", method="POST")
-        urllib.request.urlopen(req, timeout=1.0)
-        time.sleep(0.5)
-    except Exception:
-        pass
-
     my_pid = os.getpid()
     if os.name == "nt":
         try:
@@ -121,13 +109,21 @@ def kill_other_bot_instances():
 
 
 def load_bot_config():
-    if not os.path.exists(CONFIG_FILE):
-        return {"botToken": "", "allowedChatId": None, "enabled": False}
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"botToken": "", "allowedChatId": None, "enabled": False}
+    cfg = {"botToken": "", "allowedChatId": None, "pairingKey": None, "enabled": False}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    cfg.update(loaded)
+        except Exception:
+            pass
+    # Generate cryptographic pairing key if allowedChatId is not set (anti-TOFU protection)
+    if not cfg.get("allowedChatId") and not cfg.get("pairingKey"):
+        import secrets
+        cfg["pairingKey"] = secrets.token_hex(4).upper()
+        save_bot_config(cfg)
+    return cfg
 
 
 def save_bot_config(cfg):
@@ -189,10 +185,6 @@ def get_antigravity_quotas():
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         csrf_token = st.get("csrfToken")
-        if not csrf_token:
-            eval_res = call_bridge("/api/eval", method="POST", data={"code": "window.__APP_CONFIG__?.csrfToken"}, timeout=3)
-            csrf_token = eval_res.get("result")
-
         if not csrf_token:
             return None
 
@@ -861,7 +853,7 @@ class AntigravityBotDaemon:
             chat_id = cb["message"]["chat"]["id"]
             user_id = cb["from"]["id"]
             allowed = self.cfg.get("allowedChatId")
-            if allowed and user_id != allowed:
+            if not allowed or user_id != allowed:
                 return
 
             data = cb.get("data", "")
@@ -883,17 +875,39 @@ class AntigravityBotDaemon:
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
         allowed = self.cfg.get("allowedChatId")
+        text = msg.get("text", "").strip()
 
-        # Auto-bind first user if allowedChatId is empty
+        # Secure Pairing Protocol (prevents TOFU vulnerability)
         if not allowed:
-            self.cfg["allowedChatId"] = user_id
-            save_bot_config(self.cfg)
-            allowed = user_id
-            self.bot.send_message(
-                chat_id,
-                f"🔒 <b>Белый список настроен!</b>\nВаш Telegram ID (<code>{user_id}</code>) сохранён как единственный владелец бота.",
-                reply_markup=get_main_reply_keyboard()
-            )
+            pairing_key = str(self.cfg.get("pairingKey") or "").strip()
+            is_valid_pair = False
+            if text.startswith("/pair") or text.startswith("/bind"):
+                parts = text.split(maxsplit=1)
+                if len(parts) > 1 and parts[1].strip().upper() == pairing_key.upper():
+                    is_valid_pair = True
+            elif pairing_key and text.upper() == pairing_key.upper():
+                is_valid_pair = True
+
+            if is_valid_pair:
+                self.cfg["allowedChatId"] = user_id
+                save_bot_config(self.cfg)
+                self.bot.send_message(
+                    chat_id,
+                    f"🔒 <b>Устройство успешно привязано!</b>\n"
+                    f"Ваш Telegram ID (<code>{user_id}</code>) подтверждён и сохранён как владелец бота.",
+                    reply_markup=get_main_reply_keyboard()
+                )
+            else:
+                self.bot.send_message(
+                    chat_id,
+                    "🔐 <b>Требуется подтверждение привязки (Защита от перехвата)</b>\n\n"
+                    "Автоматическая привязка (TOFU) отключена для вашей безопасности.\n"
+                    "Чтобы авторизовать этот аккаунт в качестве владельца, отправьте команду:\n"
+                    "<code>/pair КЛЮЧ</code>\n\n"
+                    "🔑 Ключ привязки указан на вашем ПК в файле:\n"
+                    f"<code>{CONFIG_FILE}</code> (параметр <code>pairingKey</code>)."
+                )
+            return
 
         if user_id != allowed:
             self.bot.send_message(chat_id, "⛔ Доступ запрещен. Бот привязан к другому пользователю.")

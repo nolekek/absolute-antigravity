@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Agent Preset Conductor - Robust Multi-Tier Preset Switcher
+Agent Preset Conductor - High-Speed Multi-Tier Preset Switcher
+Tier 0: Direct Compiled Rust CLI `agy` (<5ms execution via daemon IPC or standalone)
 Tier 1: Local HTTP IPC Bridge (http://127.0.0.1:51122/api/switch-preset)
 Tier 2: Direct atomic filesystem toggle fallback (~/.gemini/config/skills/)
 """
 import sys
 import json
 import os
+import shutil
+import subprocess
 import urllib.request
 import urllib.error
 import time
@@ -116,6 +119,38 @@ PRESET_SKILLS_MAP = {
     ]
 }
 
+def find_agy_binary():
+    # 1. Check in PATH
+    bin_path = shutil.which("agy.exe") or shutil.which("agy")
+    if bin_path and os.path.isfile(bin_path):
+        return bin_path
+
+    # 2. Check in ~/.gemini/antigravity/bin/
+    home_bin = os.path.expanduser(r"~\.gemini\antigravity\bin\agy.exe")
+    if os.path.isfile(home_bin):
+        return home_bin
+    home_bin_nix = os.path.expanduser(r"~/.gemini/antigravity/bin/agy")
+    if os.path.isfile(home_bin_nix):
+        return home_bin_nix
+
+    # 3. Check workspace and build targets
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, "..", "agy", "target", "release", "agy.exe"),
+        os.path.join(script_dir, "..", "..", "agy", "target", "release", "agy.exe"),
+        os.path.join(script_dir, "..", "..", "..", "agy", "target", "release", "agy.exe"),
+        r"C:\Users\Admin\antigravityBUTmultiacc\agy\target\release\agy.exe",
+        os.path.join(os.getcwd(), "agy", "target", "release", "agy.exe"),
+        os.path.join(script_dir, "..", "agy", "target", "release", "agy"),
+        os.path.join(script_dir, "..", "..", "agy", "target", "release", "agy")
+    ]
+    for c in candidates:
+        norm = os.path.normpath(c)
+        if os.path.isfile(norm):
+            return norm
+
+    return None
+
 def update_config_active_preset(preset_name):
     try:
         cfg = {}
@@ -195,7 +230,7 @@ def switch_preset(preset_name):
                 print(f"Estimated context: ~{data.get('totalActiveTokens', 0)} tokens")
                 return True
     except Exception:
-        # Bridge unreachable (app starting/restarting or offline) -> seamlessly fall back to Tier 2
+        # Bridge unreachable -> seamlessly fall back to Tier 2
         pass
 
     # Tier 2: Direct filesystem fallback
@@ -204,9 +239,21 @@ def switch_preset(preset_name):
 def main():
     valid_presets = list(PRESET_SKILLS_MAP.keys())
     if len(sys.argv) < 2:
-        print(f"Usage: python switch.py <preset_name> ({'|'.join(valid_presets)})")
+        print(f"Usage: python switch.py <preset_name> [overlays...] ({'|'.join(valid_presets)})")
         sys.exit(1)
 
+    # Tier 0: Direct delegation to compiled high-speed Rust CLI `agy` (<5ms response)
+    agy_bin = find_agy_binary()
+    if agy_bin:
+        try:
+            cmd = [agy_bin, "preset", "switch"] + sys.argv[1:]
+            res = subprocess.run(cmd)
+            sys.exit(res.returncode)
+        except Exception:
+            # If agy fails unexpectedly, continue to fallback tiers
+            pass
+
+    # Fallback path if agy binary is absent
     target_preset = sys.argv[1].strip().lower()
     if target_preset not in PRESET_SKILLS_MAP:
         print(f"❌ Unknown preset: '{target_preset}'. Available ({len(PRESET_SKILLS_MAP)} presets): {', '.join(valid_presets)}")
