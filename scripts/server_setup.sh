@@ -49,6 +49,7 @@ SCENARIO=""
 OS_USERS=()
 PROJECT_DIRS=()
 NON_INTERACTIVE=false
+WITH_WEB=false
 
 # ------------------------------------------------------------------------------
 # Help / Usage
@@ -71,13 +72,17 @@ Scenarios:
 Options:
   --users "user1 user2"          Space-separated list of OS usernames for Scenario 1
   --projects "path1 path2"       Space-separated list of project root paths for Scenario 2
+  --with-web                     Deploy and enable Antigravity Remote Web Dashboard
+                                 systemd service on port 51125
+  --web-only                     Provision and enable Web Dashboard service only
   --doctor                       Run isolation and permissions health audit
   -y, --yes                      Non-interactive mode
   -h, --help                     Show this help message
 
 Examples:
-  sudo ./scripts/server_setup.sh --scenario 1 --users "alice bob charlie"
+  sudo ./scripts/server_setup.sh --scenario 1 --users "alice bob charlie" --with-web
   ./scripts/server_setup.sh --scenario 2 --projects "/home/dev/projectA /home/dev/projectB"
+  sudo ./scripts/server_setup.sh --web-only
   ./scripts/server_setup.sh --doctor
 EOF
     exit 0
@@ -107,6 +112,15 @@ while [[ $# -gt 0 ]]; do
         --projects)
             read -r -a PROJECT_DIRS <<< "$2"
             shift 2
+            ;;
+        --with-web)
+            WITH_WEB=true
+            shift
+            ;;
+        --web-only)
+            SCENARIO="web"
+            WITH_WEB=true
+            shift
             ;;
         --doctor)
             SCENARIO="doctor"
@@ -246,6 +260,126 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
+# Antigravity Remote Web Dashboard Service Installation
+# ------------------------------------------------------------------------------
+install_web_dashboard_service() {
+    require_root
+    log_step "Installing and configuring Antigravity Remote Web Dashboard..."
+
+    # 1. Check or install Node.js LTS
+    if ! command -v node >/dev/null 2>&1; then
+        log_info "Node.js is not found. Attempting to install Node.js LTS..."
+        if command -v apt-get >/dev/null 2>&1; then
+            curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+            apt-get install -y nodejs
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y nodejs
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y nodejs
+        elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --noconfirm nodejs npm
+        else
+            log_error "Could not determine package manager to install Node.js. Please install Node.js 18+ manually."
+            return 1
+        fi
+    fi
+
+    local node_ver
+    node_ver=$(node -v 2>/dev/null || echo "unknown")
+    log_success "Node.js detected: ${node_ver}"
+
+    # 2. Prepare /opt/antigravity and copy necessary server scripts
+    mkdir -p /opt/antigravity/scripts
+    mkdir -p /etc/antigravity
+
+    if [[ -f "${PROJECT_ROOT}/webDashboard.js" ]]; then
+        cp -f "${PROJECT_ROOT}/webDashboard.js" /opt/antigravity/webDashboard.js
+    fi
+    if [[ -f "${PROJECT_ROOT}/multiaccManager.js" ]]; then
+        cp -f "${PROJECT_ROOT}/multiaccManager.js" /opt/antigravity/multiaccManager.js
+    fi
+    if [[ -f "${PROJECT_ROOT}/credHelper.py" ]]; then
+        cp -f "${PROJECT_ROOT}/credHelper.py" /opt/antigravity/credHelper.py
+    fi
+    if [[ -f "${PROJECT_ROOT}/scripts/server_dashboard.js" ]]; then
+        cp -f "${PROJECT_ROOT}/scripts/server_dashboard.js" /opt/antigravity/scripts/server_dashboard.js
+        chmod +x /opt/antigravity/scripts/server_dashboard.js
+    fi
+
+    # 3. Create default /etc/antigravity/web.conf if not present
+    if [[ ! -f /etc/antigravity/web.conf ]]; then
+        cat << 'EOF' > /etc/antigravity/web.conf
+# ==============================================================================
+# Absolute Antigravity: Remote Web Dashboard Configuration
+# ==============================================================================
+HOST=0.0.0.0
+PORT=51125
+# PIN=123456
+EOF
+        chmod 644 /etc/antigravity/web.conf
+        log_success "Created configuration file: /etc/antigravity/web.conf"
+    fi
+
+    # 4. Install systemd service unit
+    mkdir -p /etc/systemd/system
+    if [[ -f "${PROJECT_ROOT}/scripts/antigravity-web.service" ]]; then
+        cp -f "${PROJECT_ROOT}/scripts/antigravity-web.service" /etc/systemd/system/antigravity-web.service
+    else
+        cat << 'EOF' > /etc/systemd/system/antigravity-web.service
+[Unit]
+Description=Antigravity Absolute Remote Web Dashboard
+Documentation=https://github.com/google/antigravity
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/antigravity
+EnvironmentFile=-/etc/antigravity/web.conf
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/antigravity/scripts/server_dashboard.js --host 0.0.0.0 --port 51125
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+    chmod 644 /etc/systemd/system/antigravity-web.service
+
+    # 5. Reload systemd, enable and start service
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now antigravity-web.service 2>/dev/null || systemctl enable --now antigravity-web 2>/dev/null || true
+    log_success "Enabled and started systemd service: antigravity-web"
+
+    # 6. Resolve Server IP
+    local srv_ip="127.0.0.1"
+    if command -v hostname >/dev/null 2>&1; then
+        srv_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || srv_ip="127.0.0.1"
+    fi
+    [[ -z "$srv_ip" ]] && srv_ip="127.0.0.1"
+
+    # 7. Print info
+    echo ""
+    echo -e "${C_BOLD}${C_GREEN}==================================================================${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}  🌐 ANTIGRAVITY REMOTE WEB DASHBOARD IS ONLINE!                 ${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}==================================================================${C_RESET}"
+    echo -e "  Dashboard URL:  ${C_CYAN}http://${srv_ip}:51125${C_RESET}"
+    echo -e "  Local URL:      ${C_CYAN}http://127.0.0.1:51125${C_RESET}"
+    echo -e "  Configuration:  ${C_YELLOW}/etc/antigravity/web.conf${C_RESET}"
+    echo -e "  Service Unit:   ${C_YELLOW}/etc/systemd/system/antigravity-web.service${C_RESET}"
+    echo ""
+    echo -e "  Check service status:   ${C_BOLD}systemctl status antigravity-web${C_RESET}"
+    echo -e "  View live logs & PIN:   ${C_BOLD}journalctl -u antigravity-web -f${C_RESET}"
+    echo -e "  Control via agy CLI:    ${C_BOLD}agy web status | agy web stop | agy web start${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}==================================================================${C_RESET}"
+    echo ""
+}
+
+# ------------------------------------------------------------------------------
 # SCENARIO 1: Distinct OS Users
 # ------------------------------------------------------------------------------
 setup_scenario_1() {
@@ -348,6 +482,16 @@ EOF
     log_success "Scenario 1 Provisioning Complete!"
     echo -e "Each user can now log in, run ${C_CYAN}agy account add${C_RESET} to authenticate their Google Account,"
     echo -e "and control their presets via ${C_CYAN}agy preset switch <name>${C_RESET} without interfering with each other."
+
+    if [[ "$WITH_WEB" == true ]]; then
+        install_web_dashboard_service
+    elif [[ "$NON_INTERACTIVE" == false ]]; then
+        echo ""
+        read -r -p "Deploy Remote Web Dashboard systemd service on port 51125? [y/N]: " deploy_web
+        if [[ "$deploy_web" =~ ^[Yy]$ ]]; then
+            install_web_dashboard_service
+        fi
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -438,6 +582,16 @@ EOF
 
     echo ""
     log_success "Scenario 2 Workspace Slots Provisioned Successfully!"
+
+    if [[ "$WITH_WEB" == true ]]; then
+        install_web_dashboard_service
+    elif [[ "$NON_INTERACTIVE" == false ]]; then
+        echo ""
+        read -r -p "Deploy Remote Web Dashboard systemd service on port 51125? [y/N]: " deploy_web
+        if [[ "$deploy_web" =~ ^[Yy]$ ]]; then
+            install_web_dashboard_service
+        fi
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -510,6 +664,25 @@ run_doctor() {
         fi
     fi
 
+    # 5. Check Node.js and Web Dashboard Service
+    echo -n "Checking Node.js runtime for Web Dashboard... "
+    if command -v node >/dev/null 2>&1; then
+        local node_ver
+        node_ver=$(node -v 2>/dev/null || echo "detected")
+        echo -e "${C_GREEN}PASS${C_RESET} (${node_ver})"
+    else
+        echo -e "${C_YELLOW}WARN${C_RESET} (Node.js not installed)"
+    fi
+
+    echo -n "Checking Web Dashboard systemd service... "
+    if systemctl is-active antigravity-web >/dev/null 2>&1; then
+        echo -e "${C_GREEN}ACTIVE${C_RESET} (Running on port 51125)"
+    elif [[ -f /etc/systemd/system/antigravity-web.service ]]; then
+        echo -e "${C_YELLOW}INSTALLED${C_RESET} (Service unit present, but inactive)"
+    else
+        echo -e "${C_YELLOW}NOT INSTALLED${C_RESET} (Run with --with-web to deploy)"
+    fi
+
     echo ""
     if [[ $issues -eq 0 ]]; then
         echo -e "${C_GREEN}${C_BOLD}✔ All system isolation checks passed cleanly!${C_RESET}"
@@ -530,14 +703,16 @@ interactive_menu() {
     echo "Select Deployment Architecture Scenario:"
     echo "  1) Scenario 1: Distinct OS Users (User A & User B with isolated \$HOME)"
     echo "  2) Scenario 2: Shared OS User (Dev-Box / Remote Runner with Slot Isolation)"
-    echo "  3) Doctor / Audit isolation health"
-    echo "  4) Exit"
+    echo "  3) Remote Web Dashboard (deploy systemd service on port 51125)"
+    echo "  4) Doctor / Audit isolation health"
+    echo "  5) Exit"
     echo ""
-    read -r -p "Enter choice [1-4]: " choice
+    read -r -p "Enter choice [1-5]: " choice
     case "$choice" in
         1) setup_scenario_1 ;;
         2) setup_scenario_2 ;;
-        3) run_doctor ;;
+        3) install_web_dashboard_service ;;
+        4) run_doctor ;;
         *) exit 0 ;;
     esac
 }
@@ -549,6 +724,7 @@ main() {
     case "$SCENARIO" in
         1) setup_scenario_1 ;;
         2) setup_scenario_2 ;;
+        web) install_web_dashboard_service ;;
         doctor) run_doctor ;;
         *) interactive_menu ;;
     esac

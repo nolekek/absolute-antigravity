@@ -49,6 +49,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: ProjectCommands,
     },
+    /// Manage remote server web dashboard
+    Web {
+        #[command(subcommand)]
+        action: WebAction,
+    },
     /// Interactive TUI chat session with Gemini streaming and preset context
     Chat {
         /// Account slot to use (optional, defaults to bound/active slot)
@@ -173,6 +178,25 @@ enum DaemonCommands {
     /// Stop the background daemon
     Stop,
     /// Check daemon status
+    Status,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum WebAction {
+    /// Start the remote web dashboard server
+    Start {
+        #[arg(short = 'H', long, default_value = "0.0.0.0")]
+        host: String,
+        #[arg(short, long, default_value_t = 51125)]
+        port: u16,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(short, long)]
+        daemon: bool,
+    },
+    /// Stop the background remote web dashboard server
+    Stop,
+    /// Check the status of the remote web dashboard server
     Status,
 }
 
@@ -760,6 +784,457 @@ fn execute_daemon_start(foreground: bool, socket: Option<&str>) -> anyhow::Resul
 }
 
 // ---------------------------------------------------------------------------
+// Web Dashboard Subcommands
+// ---------------------------------------------------------------------------
+
+fn get_web_pid_path() -> Option<PathBuf> {
+    agy_core::presets::dirs_home().map(|h| h.join(".gemini").join("antigravity").join("web.pid"))
+}
+
+fn load_web_config_details() -> (u16, Option<String>) {
+    let mut port = 51125;
+    let mut pin = None;
+
+    if let Some(home) = agy_core::presets::dirs_home() {
+        let cfg_path = home.join(".gemini").join("antigravity_web_config.json");
+        if cfg_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(p) = val.get("port").and_then(|v| v.as_u64()) {
+                        port = p as u16;
+                    }
+                    if let Some(p) = val.get("pin").and_then(|v| v.as_str()) {
+                        pin = Some(p.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let etc_conf = PathBuf::from("/etc/antigravity/web.conf");
+    if etc_conf.exists() {
+        if let Ok(content) = std::fs::read_to_string(&etc_conf) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') || trimmed.starts_with(';') {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    let key = k.trim().to_uppercase();
+                    let val = v.trim().trim_matches('"').trim_matches('\'');
+                    if key == "PORT" {
+                        if let Ok(p) = val.parse::<u16>() {
+                            port = p;
+                        }
+                    } else if key == "PIN" && !val.is_empty() {
+                        pin = Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    (port, pin)
+}
+
+fn find_dashboard_script() -> Option<PathBuf> {
+    if let Ok(cwd) = std::env::current_dir() {
+        let p1 = cwd.join("scripts").join("server_dashboard.js");
+        if p1.exists() {
+            return Some(p1);
+        }
+        let p2 = cwd.join("server_dashboard.js");
+        if p2.exists() {
+            return Some(p2);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let p = exe_dir.join("scripts").join("server_dashboard.js");
+            if p.exists() {
+                return Some(p);
+            }
+            if let Some(parent) = exe_dir.parent() {
+                let p = parent.join("scripts").join("server_dashboard.js");
+                if p.exists() {
+                    return Some(p);
+                }
+                if let Some(grandparent) = parent.parent() {
+                    let p = grandparent.join("scripts").join("server_dashboard.js");
+                    if p.exists() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(home) = agy_core::presets::dirs_home() {
+        let p = home.join(".gemini").join("antigravity").join("scripts").join("server_dashboard.js");
+        if p.exists() {
+            return Some(p);
+        }
+        let p2 = home.join(".gemini").join("antigravity").join("server_dashboard.js");
+        if p2.exists() {
+            return Some(p2);
+        }
+    }
+
+    let linux_p1 = PathBuf::from("/opt/antigravity/scripts/server_dashboard.js");
+    if linux_p1.exists() {
+        return Some(linux_p1);
+    }
+    let linux_p2 = PathBuf::from("/opt/antigravity/webDashboard.js");
+    if linux_p2.exists() {
+        return Some(linux_p2);
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .output();
+    if let Ok(out) = output {
+        let text = String::from_utf8_lossy(&out.stdout);
+        return text.contains(&pid.to_string()) && !text.contains("No tasks");
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn is_pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn stop_pid_process(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+    }
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        if !is_pid_alive(pid) {
+            return true;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !is_pid_alive(pid) {
+            return true;
+        }
+    }
+    !is_pid_alive(pid)
+}
+
+async fn query_web_state(port: u16, pin: Option<&str>) -> Result<(bool, Option<serde_json::Value>), reqwest::Error> {
+    let url = format!("http://127.0.0.1:{}/api/state", port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(2500))
+        .build()?;
+
+    let mut req = client.get(&url);
+    if let Some(p) = pin {
+        req = req.header("x-dashboard-pin", p);
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                let json = resp.json::<serde_json::Value>().await.ok();
+                Ok((true, json))
+            } else {
+                Ok((true, None))
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn execute_web_start(
+    host: String,
+    port: u16,
+    pin: Option<String>,
+    daemon: bool,
+) -> anyhow::Result<()> {
+    if let Some(pid_path) = get_web_pid_path() {
+        if pid_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&pid_path) {
+                if let Ok(pid) = content.trim().parse::<u32>() {
+                    if is_pid_alive(pid) {
+                        println!("{} Antigravity Web Dashboard is already running (PID: {}).", "ℹ".blue().bold(), pid);
+                        println!("Use {} to inspect status or {} to stop it.\n", "agy web status".bold(), "agy web stop".bold());
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    let script_path = find_dashboard_script().unwrap_or_else(|| PathBuf::from("scripts/server_dashboard.js"));
+    if !script_path.exists() {
+        eprintln!(
+            "{} Could not find dashboard script at: {}",
+            "❌".red().bold(),
+            script_path.display()
+        );
+        eprintln!("Please ensure scripts/server_dashboard.js exists in the workspace or /opt/antigravity/scripts/");
+        return Ok(());
+    }
+
+    let node_bin = if cfg!(windows) { "node.exe" } else { "node" };
+
+    if !daemon {
+        println!("\n{} Starting Antigravity Web Dashboard in foreground on {}:{}...", "🚀".bold(), host, port);
+        println!("Press Ctrl+C to stop the web server.\n");
+
+        let mut cmd = std::process::Command::new(node_bin);
+        cmd.arg(&script_path);
+        cmd.arg("--host").arg(&host);
+        cmd.arg("--port").arg(port.to_string());
+        if let Some(ref p) = pin {
+            cmd.arg("--pin").arg(p);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            anyhow::anyhow!("Failed to spawn node (ensure Node.js is installed): {}", e)
+        })?;
+        let pid = child.id();
+        if let Some(pid_path) = get_web_pid_path() {
+            if let Some(parent) = pid_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&pid_path, pid.to_string());
+        }
+
+        let status = child.wait()?;
+        if let Some(pid_path) = get_web_pid_path() {
+            let _ = std::fs::remove_file(pid_path);
+        }
+        if !status.success() {
+            println!("Web dashboard exited with code: {:?}", status.code());
+        }
+        return Ok(());
+    }
+
+    println!("{} Launching Antigravity Web Dashboard in background (daemon mode)...", "🚀".bold());
+
+    let mut cmd = std::process::Command::new(node_bin);
+    cmd.arg(&script_path);
+    cmd.arg("--host").arg(&host);
+    cmd.arg("--port").arg(port.to_string());
+    if let Some(ref p) = pin {
+        cmd.arg("--pin").arg(p);
+    }
+
+    let log_path = agy_core::presets::dirs_home()
+        .map(|h| h.join(".gemini").join("antigravity").join("web.log"));
+    if let Some(ref lp) = log_path {
+        if let Some(parent) = lp.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(lp) {
+            if let Ok(out_file) = file.try_clone() {
+                cmd.stdout(out_file);
+            }
+            cmd.stderr(file);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW (0x08000000) | DETACHED_PROCESS (0x00000008)
+        cmd.creation_flags(0x08000000 | 0x00000008);
+    }
+
+    let child = cmd.spawn().map_err(|e| {
+        anyhow::anyhow!("Failed to spawn node (ensure Node.js is installed): {}", e)
+    })?;
+    let pid = child.id();
+
+    if let Some(pid_path) = get_web_pid_path() {
+        if let Some(parent) = pid_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&pid_path, pid.to_string());
+    }
+
+    print!("Waiting for web dashboard initialization");
+    let mut ready = false;
+    let rt = tokio::runtime::Runtime::new()?;
+    for _ in 0..15 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        print!(".");
+        let _ = io::stdout().flush();
+        let check = rt.block_on(async {
+            query_web_state(port, pin.as_deref()).await.is_ok()
+        });
+        if check {
+            ready = true;
+            break;
+        }
+    }
+    println!();
+
+    if ready {
+        println!("{} Antigravity Web Dashboard started successfully!", "✅".green().bold());
+        println!("  {}   {}", "PID:".bold(), pid);
+        println!("  {}   http://{}:{}", "Local:".bold(), if host == "0.0.0.0" { "127.0.0.1" } else { &host }, port);
+        if let Some(ref lp) = log_path {
+            println!("  {}   {}", "Logs:".bold(), lp.display());
+        }
+        println!("\nUse {} to verify live status or {} to stop.", "agy web status".bold(), "agy web stop".bold());
+    } else {
+        if is_pid_alive(pid) {
+            println!("{} Web dashboard process running (PID: {}), initializing port...", "⚠️".yellow(), pid);
+        } else {
+            println!("{} Web dashboard process terminated unexpectedly. Check logs.", "❌".red().bold());
+        }
+    }
+
+    Ok(())
+}
+
+fn execute_web_stop() -> anyhow::Result<()> {
+    let pid_path = match get_web_pid_path() {
+        Some(p) => p,
+        None => {
+            println!("Antigravity Web Dashboard PID file not found.");
+            return Ok(());
+        }
+    };
+
+    if !pid_path.exists() {
+        println!("Antigravity Web Dashboard is not running (PID file missing).");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&pid_path)?;
+    let pid = match content.trim().parse::<u32>() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = std::fs::remove_file(&pid_path);
+            println!("Removed invalid web PID file.");
+            return Ok(());
+        }
+    };
+
+    if !is_pid_alive(pid) {
+        let _ = std::fs::remove_file(&pid_path);
+        println!("Web dashboard process {} was not active. Cleaned up stale PID file.", pid);
+        return Ok(());
+    }
+
+    println!("Stopping Antigravity Web Dashboard (PID: {})...", pid);
+    if stop_pid_process(pid) {
+        let _ = std::fs::remove_file(&pid_path);
+        println!("{} Antigravity Web Dashboard stopped successfully.", "✅".green().bold());
+    } else {
+        println!("{} Could not stop web dashboard process {}.", "❌".red().bold(), pid);
+    }
+
+    Ok(())
+}
+
+fn execute_web_status() -> anyhow::Result<()> {
+    let pid_opt = get_web_pid_path().and_then(|p| {
+        if p.exists() {
+            std::fs::read_to_string(&p).ok().and_then(|c| c.trim().parse::<u32>().ok())
+        } else {
+            None
+        }
+    });
+
+    let (port, pin) = load_web_config_details();
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let http_res = rt.block_on(async {
+        query_web_state(port, pin.as_deref()).await
+    });
+
+    let pid_alive = pid_opt.map(is_pid_alive).unwrap_or(false);
+
+    match http_res {
+        Ok((true, Some(ref data))) => {
+            println!("\n{}", "🌐 Antigravity Remote Web Dashboard: RUNNING (Online)".green().bold());
+            if let Some(pid) = pid_opt {
+                println!("  PID:           {}", pid);
+            }
+            println!("  Port:          {}", port);
+            if let Some(ref p) = pin {
+                println!("  Security PIN:  {}", p.yellow());
+            }
+            println!("  Local URL:     http://127.0.0.1:{}", port);
+            if let Some(lan_ip) = data.get("lanIp").and_then(|v| v.as_str()) {
+                println!("  LAN URL:       http://{}:{}", lan_ip, port);
+            }
+            if let Some(preset) = data.get("activePreset").and_then(|v| v.as_str()) {
+                println!("  Active Preset: 🎯 {}", preset.cyan().bold());
+            }
+            if let Some(status) = data.get("status") {
+                if let Some(slot) = status.get("activeSlot").and_then(|v| v.as_u64()) {
+                    let email = status.get("primaryEmail").and_then(|v| v.as_str()).unwrap_or("Unknown");
+                    println!("  Account Slot:  Slot {} ({})", slot, email.green());
+                }
+                if let Some(slots_count) = status.get("slotsCount").and_then(|v| v.as_u64()) {
+                    println!("  Total Slots:   {} configured", slots_count);
+                }
+            }
+            println!();
+        }
+        Ok((true, None)) => {
+            println!("\n{}", "🌐 Antigravity Remote Web Dashboard: RUNNING (Online)".green().bold());
+            if let Some(pid) = pid_opt {
+                println!("  PID:       {}", pid);
+            }
+            println!("  Port:      {}", port);
+            if let Some(ref p) = pin {
+                println!("  PIN:       {}", p.yellow());
+            }
+            println!("  Local URL: http://127.0.0.1:{}", port);
+            println!();
+        }
+        _ => {
+            if pid_alive {
+                println!("\n{}", "⚠️  Antigravity Web Dashboard: PROCESS ACTIVE (Port initializing or blocked)".yellow().bold());
+                if let Some(pid) = pid_opt {
+                    println!("  PID:   {}", pid);
+                }
+                println!("  Port:  {} (not answering HTTP)", port);
+                println!();
+            } else {
+                println!("\n{}", "⭕ Antigravity Remote Web Dashboard: OFFLINE".dimmed().bold());
+                println!("  Port:  {}", port);
+                println!("  Use {} to launch in background.\n", "agy web start --daemon".bold());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Chat and Exec Subcommands
 // ---------------------------------------------------------------------------
 
@@ -1257,6 +1732,22 @@ fn main() -> anyhow::Result<()> {
                 execute_daemon_start(foreground, socket)?;
             }
         },
+        Commands::Web { action } => match action {
+            WebAction::Start {
+                host,
+                port,
+                pin,
+                daemon,
+            } => {
+                execute_web_start(host, port, pin, daemon)?;
+            }
+            WebAction::Stop => {
+                execute_web_stop()?;
+            }
+            WebAction::Status => {
+                execute_web_status()?;
+            }
+        },
         Commands::Chat { slot, preset, model } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(execute_chat(slot, preset, model))?;
@@ -1357,5 +1848,88 @@ mod tests {
 
         // Case 4: Neither prompt nor piped context
         assert_eq!(format_exec_prompt(None, "   "), None);
+    }
+
+    #[test]
+    fn test_web_start_command_parsing_defaults() {
+        let args = ["agy", "web", "start"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy web start'");
+        match cli.command {
+            Commands::Web { action } => match action {
+                WebAction::Start {
+                    host,
+                    port,
+                    pin,
+                    daemon,
+                } => {
+                    assert_eq!(host, "0.0.0.0");
+                    assert_eq!(port, 51125);
+                    assert_eq!(pin, None);
+                    assert_eq!(daemon, false);
+                }
+                _ => panic!("Expected WebAction::Start"),
+            },
+            _ => panic!("Expected Commands::Web"),
+        }
+    }
+
+    #[test]
+    fn test_web_start_command_parsing_with_flags() {
+        let args = [
+            "agy",
+            "web",
+            "start",
+            "-H",
+            "192.168.1.50",
+            "-p",
+            "8080",
+            "--pin",
+            "123456",
+            "--daemon",
+        ];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy web start with flags'");
+        match cli.command {
+            Commands::Web { action } => match action {
+                WebAction::Start {
+                    host,
+                    port,
+                    pin,
+                    daemon,
+                } => {
+                    assert_eq!(host, "192.168.1.50");
+                    assert_eq!(port, 8080);
+                    assert_eq!(pin, Some("123456".to_string()));
+                    assert_eq!(daemon, true);
+                }
+                _ => panic!("Expected WebAction::Start"),
+            },
+            _ => panic!("Expected Commands::Web"),
+        }
+    }
+
+    #[test]
+    fn test_web_stop_command_parsing() {
+        let args = ["agy", "web", "stop"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy web stop'");
+        match cli.command {
+            Commands::Web { action } => match action {
+                WebAction::Stop => {}
+                _ => panic!("Expected WebAction::Stop"),
+            },
+            _ => panic!("Expected Commands::Web"),
+        }
+    }
+
+    #[test]
+    fn test_web_status_command_parsing() {
+        let args = ["agy", "web", "status"];
+        let cli = Cli::try_parse_from(args).expect("Failed to parse 'agy web status'");
+        match cli.command {
+            Commands::Web { action } => match action {
+                WebAction::Status => {}
+                _ => panic!("Expected WebAction::Status"),
+            },
+            _ => panic!("Expected Commands::Web"),
+        }
     }
 }

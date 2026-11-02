@@ -430,9 +430,20 @@ function applyPresetSafe(presetName, overlays = []) {
 // ---------------------------------------------------------------------------
 
 class WebDashboardServer {
-    constructor(multiaccManager) {
+    constructor(multiaccManager, options = {}) {
         this.multiacc = multiaccManager;
         this.config = loadWebConfig();
+        if (options.port) this.config.port = Number(options.port);
+        if (options.pin) this.config.pin = String(options.pin).trim();
+        if (options.host) {
+            this.config.host = options.host;
+            if (options.host === "0.0.0.0" || options.host === "::") {
+                this.config.allowLan = true;
+            }
+        }
+        if (options.allowLan !== undefined) {
+            this.config.allowLan = Boolean(options.allowLan);
+        }
         this.server = null;
         this.activeConversationIdOverride = null;
     }
@@ -879,15 +890,22 @@ class WebDashboardServer {
             }
         });
 
-        const bindHost = this.config.allowLan === true ? "0.0.0.0" : "127.0.0.1";
+        const bindHost = this.config.host || (this.config.allowLan === true ? "0.0.0.0" : "127.0.0.1");
         try {
             this.server.listen(PORT, bindHost, () => {
-                const hostDisplay = this.config.allowLan === true ? getLanIp() : "127.0.0.1";
+                const hostDisplay = this.config.allowLan === true ? getLanIp() : (this.config.host || "127.0.0.1");
                 console.log(`[WebDashboard] 📱 Dashboard active at http://${hostDisplay}:${PORT} (${this.config.allowLan ? "LAN" : "Local-only 127.0.0.1"})`);
             });
             try { this.server.unref(); } catch (_) {}
         } catch (e) {
             console.error(`[WebDashboard] Failed to bind ${bindHost}:`, e);
+        }
+    }
+
+    stop() {
+        if (this.server) {
+            try { this.server.close(); } catch (_) {}
+            this.server = null;
         }
     }
 
@@ -2437,8 +2455,8 @@ class WebDashboardServer {
     }
 }
 
-function startWebDashboard(multiaccManager) {
-    const dashboard = new WebDashboardServer(multiaccManager);
+function startWebDashboard(multiaccManager, options = {}) {
+    const dashboard = new WebDashboardServer(multiaccManager, options);
     dashboard.start();
     return dashboard;
 }

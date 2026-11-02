@@ -1107,6 +1107,7 @@ class MultiaccManager {
 
 
     startWebDashboard() {
+        if (process.env.AGY_STANDALONE_WEB === '1') return;
         const isTest = process.env.NODE_ENV === 'test' || process.argv.some(a => a.includes('test'));
         if (isTest) return;
         try {

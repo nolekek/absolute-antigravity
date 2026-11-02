@@ -10,6 +10,7 @@ dependencies = [
  "anyhow",
  "clap",
  "colored",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

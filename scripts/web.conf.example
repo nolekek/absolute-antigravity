@@ -1,0 +1,13 @@
+# ==============================================================================
+# Absolute Antigravity: Remote Web Dashboard Configuration
+# Location: /etc/antigravity/web.conf
+# ==============================================================================
+
+# Bind host (0.0.0.0 for LAN / Public Internet, 127.0.0.1 for local-only)
+HOST=0.0.0.0
+
+# HTTP Port
+PORT=51125
+
+# 6-digit access security PIN (leave commented for auto-generated crypto PIN)
+# PIN=123456

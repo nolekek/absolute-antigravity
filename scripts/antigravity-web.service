@@ -1,0 +1,20 @@
+[Unit]
+Description=Antigravity Absolute Remote Web Dashboard
+Documentation=https://github.com/google/antigravity
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/antigravity
+EnvironmentFile=-/etc/antigravity/web.conf
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/antigravity/scripts/server_dashboard.js --host 0.0.0.0 --port 51125
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
