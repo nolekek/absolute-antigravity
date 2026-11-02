@@ -41,7 +41,7 @@ const { spawn, exec, execFileSync } = require("child_process");
 // -----------------------------------------------------------------------------
 // Constants & Paths
 // -----------------------------------------------------------------------------
-const VERSION = "4.0.0";
+const VERSION = "4.0.1";
 const USER_HOME = os.homedir() || process.env.USERPROFILE || process.env.HOME || "";
 const GEMINI_DIR = path.join(USER_HOME, ".gemini");
 const ANTIGRAVITY_DIR = path.join(GEMINI_DIR, "antigravity");
@@ -1381,10 +1381,12 @@ class ServerDashboard {
         console.log("  ╚══════════════════════════════════════════════════════════════════════════╝");
         console.log("  Enter this 6-digit PIN in your browser to unlock dashboard & studio controls.\n");
         console.log("  🌐 Access URLs:");
-        console.log(`     * Localhost:    \x1b[36mhttp://127.0.0.1:${this.port}\x1b[0m`);
-        if (lanIp !== "127.0.0.1") {
-            console.log(`     * Network LAN:  \x1b[32m\x1b[1mhttp://${lanIp}:${this.port}\x1b[0m (Phone / Remote Laptop)`);
+        console.log(`     * Localhost:    \x1b[36mhttp://127.0.0.1:${this.port}/?pin=${this.pin}\x1b[0m`);
+        if (lanIp && lanIp !== "127.0.0.1") {
+            console.log(`     * Remote LAN:   \x1b[32m\x1b[1mhttp://${lanIp}:${this.port}/?pin=${this.pin}\x1b[0m (Phone / Remote Laptop)`);
         }
+        console.log(`     * SSH Tunnel:   \x1b[33mssh -N -L ${this.port}:127.0.0.1:${this.port} <user>@${lanIp && lanIp !== "127.0.0.1" ? lanIp : "<server-ip>"}\x1b[0m`);
+        console.log(`                     (then open \x1b[36mhttp://localhost:${this.port}/?pin=${this.pin}\x1b[0m on your local PC)`);
         console.log(`     * Binding:      ${this.host}:${this.port}`);
         console.log(`     * Workspace:    ${this.workspace}`);
         console.log("  🛡️  Security Policy: 5 failed PIN attempts triggers 15-min IP lock.");

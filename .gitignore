@@ -28,11 +28,13 @@ desktop.ini
 # Build & Installer artifacts
 build/
 /dist/
+/dist_release/
 target/
 **/target/
 *.pdb
 build_installer/build/
 build_installer/dist/
+/dist_release/
 *.spec
 *.exe
 !binaries/**

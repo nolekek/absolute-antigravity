@@ -1,6 +1,6 @@
 [package]
 name = "agy-core"
-version = "4.0.0"
+version = "4.0.1"
 edition = "2021"
 authors = ["Antigravity Core Team"]
 description = "Core library for Absolute Antigravity CLI suite"

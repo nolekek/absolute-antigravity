@@ -14,7 +14,7 @@ use agy_core::{
 #[derive(Parser)]
 #[command(
     name = "agy",
-    version = "4.0.0",
+    version = "4.0.1",
     about = "Autonomous Headless CLI for Absolute Antigravity",
     after_help = "Examples:\n  agy chat\n  agy chat --preset backend --model gemini-2.0-flash\n  cat code.rs | agy exec \"найди баги\"\n  agy exec \"Объясни модель владения в Rust\"\n  agy preset switch backend qa\n  agy preset switch web +qa +docker -w /path/to/project\n  agy preset list\n  agy account status\n  agy account rotate\n  agy account get-token\n  agy account export-env\n  agy project init --slot 2 --preset backend\n  agy daemon start"
 )]
@@ -715,15 +715,9 @@ fn execute_daemon_status(socket: Option<&str>) -> anyhow::Result<()> {
             }
             if let Some(web) = data.get("web") {
                 if web.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    let port = web.get("port").and_then(|v| v.as_u64()).unwrap_or(51125);
-                    let host = web.get("host").and_then(|v| v.as_str()).unwrap_or("0.0.0.0");
-                    let display_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
+                    let port = web.get("port").and_then(|v| v.as_u64()).unwrap_or(51125) as u16;
                     let (_, pin) = load_web_config_details();
-                    let dash_url = match pin {
-                        Some(ref p) => format!("http://{}:{}/?pin={}", display_host, port, p),
-                        None => format!("http://{}:{}", display_host, port),
-                    };
-                    println!("  🌐 Веб-интерфейс: {}", dash_url.cyan().bold());
+                    print_web_access_info(port, pin.as_deref());
                 }
             }
             println!();
@@ -794,13 +788,7 @@ fn execute_daemon_start(
         if !no_web {
             let (cfg_port, pin) = load_web_config_details();
             let port = web_port.unwrap_or(cfg_port);
-            let host = web_host.as_deref().unwrap_or("127.0.0.1");
-            let display_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
-            let dash_url = match pin {
-                Some(ref p) => format!("http://{}:{}/?pin={}", display_host, port, p),
-                None => format!("http://{}:{}", display_host, port),
-            };
-            println!("  {}  {}", "🌐 Web Dashboard:".bold(), dash_url.cyan().bold());
+            print_web_access_info(port, pin.as_deref());
         }
         return Ok(());
     }
@@ -885,13 +873,7 @@ fn execute_daemon_start(
             if !no_web {
                 let (cfg_port, pin) = load_web_config_details();
                 let port = web_port.unwrap_or(cfg_port);
-                let host = web_host.as_deref().unwrap_or("127.0.0.1");
-                let display_host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
-                let dash_url = match pin {
-                    Some(ref p) => format!("http://{}:{}/?pin={}", display_host, port, p),
-                    None => format!("http://{}:{}", display_host, port),
-                };
-                println!("  {}  {}", "🌐 Web Dashboard:".bold(), dash_url.cyan().bold());
+                print_web_access_info(port, pin.as_deref());
             }
         } else {
             println!(
@@ -981,6 +963,73 @@ fn load_web_config_details() -> (u16, Option<String>) {
     }
 
     (port, pin)
+}
+
+fn get_local_network_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let local_addr = socket.local_addr().ok()?;
+    let ip = local_addr.ip().to_string();
+    if ip != "0.0.0.0" && ip != "127.0.0.1" {
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+fn print_web_access_info(port: u16, pin: Option<&str>) {
+    let pin_query = pin.map(|p| format!("?pin={}", p)).unwrap_or_default();
+    let net_ip = get_local_network_ip();
+
+    println!("  🌐 Веб-интерфейс Antigravity Web Studio:");
+    println!("     🏠 Локально (на сервере): {}", format!("http://127.0.0.1:{}/{}", port, pin_query).cyan().bold());
+
+    if let Some(ref ip) = net_ip {
+        println!("     🌍 Удаленно (LAN/VPN IP):  {}", format!("http://{}:{}/{}", ip, port, pin_query).green().bold());
+        println!("     🔑 SSH Туннель для доступа с домашнего ПК (рекомендуется):");
+        println!("        {}", format!("ssh -N -L {}:127.0.0.1:{} <user>@{}", port, port, ip).yellow().bold());
+        println!("        затем откройте в браузере: {}", format!("http://localhost:{}/{}", port, pin_query).cyan().bold());
+    } else {
+        println!("     🔑 SSH Туннель для доступа с домашнего ПК:");
+        println!("        {}", format!("ssh -N -L {}:127.0.0.1:{} <user>@<IP_СЕРВЕРА>", port, port).yellow().bold());
+        println!("        затем откройте в браузере: {}", format!("http://localhost:{}/{}", port, pin_query).cyan().bold());
+    }
+}
+
+fn strip_terminal_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if let Some(&'[') = chars.peek() {
+                chars.next();
+                while let Some(&nc) = chars.peek() {
+                    if nc.is_ascii_digit() || nc == ';' || nc == '?' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(&nc) = chars.peek() {
+                    if ('@'..='~').contains(&nc) {
+                        chars.next();
+                    }
+                }
+            } else if let Some(&']') = chars.peek() {
+                chars.next();
+                while let Some(sc) = chars.next() {
+                    if sc == '\x07' || sc == '\x1b' {
+                        break;
+                    }
+                }
+            }
+        } else if c == '\r' {
+            continue;
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn find_dashboard_script() -> Option<PathBuf> {
@@ -1255,7 +1304,8 @@ fn execute_web_start(
     if ready {
         println!("{} Antigravity Web Dashboard started successfully!", "✅".green().bold());
         println!("  {}   {}", "PID:".bold(), pid);
-        println!("  {}   http://{}:{}", "Local:".bold(), if host == "0.0.0.0" { "127.0.0.1" } else { &host }, port);
+        let (_, pin) = load_web_config_details();
+        print_web_access_info(port, pin.as_deref());
         if let Some(ref lp) = log_path {
             println!("  {}   {}", "Logs:".bold(), lp.display());
         }
@@ -1336,14 +1386,10 @@ fn execute_web_status() -> anyhow::Result<()> {
             if let Some(pid) = pid_opt {
                 println!("  PID:           {}", pid);
             }
-            println!("  Port:          {}", port);
             if let Some(ref p) = pin {
                 println!("  Security PIN:  {}", p.yellow());
             }
-            println!("  Local URL:     http://127.0.0.1:{}", port);
-            if let Some(lan_ip) = data.get("lanIp").and_then(|v| v.as_str()) {
-                println!("  LAN URL:       http://{}:{}", lan_ip, port);
-            }
+            print_web_access_info(port, pin.as_deref());
             if let Some(preset) = data.get("activePreset").and_then(|v| v.as_str()) {
                 println!("  Active Preset: 🎯 {}", preset.cyan().bold());
             }
@@ -1363,11 +1409,10 @@ fn execute_web_status() -> anyhow::Result<()> {
             if let Some(pid) = pid_opt {
                 println!("  PID:       {}", pid);
             }
-            println!("  Port:      {}", port);
             if let Some(ref p) = pin {
                 println!("  PIN:       {}", p.yellow());
             }
-            println!("  Local URL: http://127.0.0.1:{}", port);
+            print_web_access_info(port, pin.as_deref());
             println!();
         }
         _ => {
@@ -1449,26 +1494,39 @@ async fn execute_chat(
     println!("{}  {} {} ({} активных навыков)", "│".cyan(), "🎯 Пресет:".bold(), current_preset.bold().magenta(), skills_count.to_string().green());
     println!("{}  {} {}", "│".cyan(), "🤖 Модель:".bold(), current_model.cyan().bold());
     println!("{}                                                                  {}", "│".cyan(), "│".cyan());
-    println!("{}  {} /preset <name>, /slot <N>, /status, /clear, /exit      {}", "│".cyan(), "Команды:".dimmed(), "│".cyan());
+    println!("{}  {} /preset <name>, /slot <N>, /slot add, /status, /help   {}", "│".cyan(), "Команды:".dimmed(), "│".cyan());
     println!("{}", "╰──────────────────────────────────────────────────────────────────╯".cyan());
     println!();
 
     let mut history: Vec<ChatMessage> = Vec::new();
     let stdin = io::stdin();
-    let mut line_buf = String::new();
+    let mut byte_buf = Vec::new();
 
     loop {
         print!("{} ", "agy >".green().bold());
         let _ = io::stdout().flush();
-        line_buf.clear();
+        byte_buf.clear();
 
-        if stdin.read_line(&mut line_buf)? == 0 {
-            // EOF reached (Ctrl+D / Ctrl+Z)
-            println!("\n{}", "Сессия чата завершена.".dimmed());
-            break;
+        {
+            use std::io::BufRead;
+            let mut handle = stdin.lock();
+            match handle.read_until(b'\n', &mut byte_buf) {
+                Ok(0) => {
+                    // EOF reached (Ctrl+D / Ctrl+Z)
+                    println!("\n{}", "Сессия чата завершена.".dimmed());
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("\n{} {}", "⚠️ Ошибка ввода:".yellow().bold(), e);
+                    continue;
+                }
+            }
         }
 
-        let input = line_buf.trim();
+        let raw_lossy = String::from_utf8_lossy(&byte_buf);
+        let cleaned = strip_terminal_escapes(&raw_lossy);
+        let input = cleaned.trim();
         if input.is_empty() {
             continue;
         }
@@ -1485,10 +1543,14 @@ async fn execute_chat(
                 "/help" | "/?" => {
                     println!("\n{}", "Доступные slash-команды:".bold());
                     println!("  {}     - сменить активный пресет (например: /preset backend, /preset web)", "/preset <name>".cyan().bold());
+                    println!("  {}            - показать список всех доступных пресетов", "/presets".cyan().bold());
                     println!("  {}        - переключить слот учетной записи (например: /slot 2)", "/slot <N>".cyan().bold());
+                    println!("  {}     - показать список всех слотов и активный аккаунт", "/slot list, /account".cyan().bold());
+                    println!("  {}      - мастер добавления нового Google аккаунта", "/slot add, /account add".cyan().bold());
+                    println!("  {}   - переключиться на следующий слот (ротация)", "/slot rotate".cyan().bold());
                     println!("  {}         - показать подробный статус сессии", "/status".cyan().bold());
                     println!("  {}          - очистить историю сообщений", "/clear".cyan().bold());
-                    println!("  {}           - показать справку", "/help".cyan().bold());
+                    println!("  {}           - показать эту справку", "/help".cyan().bold());
                     println!("  {}           - выйти из чата\n", "/exit".cyan().bold());
                 }
                 "/clear" => {
@@ -1507,6 +1569,9 @@ async fn execute_chat(
                     println!("  🤖 Модель: {}", current_model.cyan().bold());
                     println!("  💬 Сообщений в истории: {}", history.len());
                     println!("  🛠️ Активные навыки: {}\n", skills_str.dimmed());
+                }
+                "/presets" => {
+                    let _ = execute_preset_list_standalone(ws.as_deref());
                 }
                 "/preset" => {
                     if parts.len() < 2 {
@@ -1531,9 +1596,70 @@ async fn execute_chat(
                         }
                     }
                 }
+                "/account" | "/accounts" => {
+                    if parts.len() < 2 || parts[1] == "list" || parts[1] == "status" {
+                        let _ = execute_account_status_standalone(ws.as_deref());
+                    } else if parts[1] == "add" {
+                        println!("\n{} Запуск мастера добавления Google аккаунта...", "🔑".bold());
+                        if let Err(e) = execute_account_add_standalone() {
+                            eprintln!("{} {}", "❌ Ошибка добавления аккаунта:".red().bold(), e);
+                        } else if let Ok(st) = cred_mgr.get_status() {
+                            current_slot = st.active_slot;
+                            email = st.current_email.unwrap_or_else(|| "Unknown".to_string());
+                            client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
+                            println!("{} Активный слот обновлен: [{}] ({})", "✅".green().bold(), current_slot.to_string().cyan().bold(), email.green().bold());
+                        }
+                    } else if parts[1] == "rotate" || parts[1] == "next" {
+                        match cred_mgr.rotate(None) {
+                            Ok(st) => {
+                                current_slot = st.active_slot;
+                                email = st.current_email.unwrap_or_else(|| "Unknown".to_string());
+                                client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
+                                println!(
+                                    "{} [Карусель]: Переключено на слот [{}/{}] {}",
+                                    "🔄".bold(),
+                                    current_slot.to_string().cyan().bold(),
+                                    st.slots_count,
+                                    email.green().bold()
+                                );
+                            }
+                            Err(e) => eprintln!("{} {}", "❌ Ошибка ротации:".red().bold(), e),
+                        }
+                    } else {
+                        println!("{} Неизвестная команда '/account {}'. Доступно: list, add, rotate", "❌ Ошибка:".red().bold(), parts[1]);
+                    }
+                }
                 "/slot" => {
                     if parts.len() < 2 {
-                        println!("{} Укажите номер слота, например: /slot 2", "❌ Ошибка:".red().bold());
+                        let _ = execute_account_status_standalone(ws.as_deref());
+                    } else if parts[1] == "list" || parts[1] == "status" {
+                        let _ = execute_account_status_standalone(ws.as_deref());
+                    } else if parts[1] == "add" {
+                        println!("\n{} Запуск мастера добавления Google аккаунта...", "🔑".bold());
+                        if let Err(e) = execute_account_add_standalone() {
+                            eprintln!("{} {}", "❌ Ошибка добавления аккаунта:".red().bold(), e);
+                        } else if let Ok(st) = cred_mgr.get_status() {
+                            current_slot = st.active_slot;
+                            email = st.current_email.unwrap_or_else(|| "Unknown".to_string());
+                            client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
+                            println!("{} Активный слот обновлен: [{}] ({})", "✅".green().bold(), current_slot.to_string().cyan().bold(), email.green().bold());
+                        }
+                    } else if parts[1] == "rotate" || parts[1] == "next" {
+                        match cred_mgr.rotate(None) {
+                            Ok(st) => {
+                                current_slot = st.active_slot;
+                                email = st.current_email.unwrap_or_else(|| "Unknown".to_string());
+                                client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
+                                println!(
+                                    "{} [Карусель]: Переключено на слот [{}/{}] {}",
+                                    "🔄".bold(),
+                                    current_slot.to_string().cyan().bold(),
+                                    st.slots_count,
+                                    email.green().bold()
+                                );
+                            }
+                            Err(e) => eprintln!("{} {}", "❌ Ошибка ротации:".red().bold(), e),
+                        }
                     } else if let Ok(s) = parts[1].parse::<u32>() {
                         current_slot = s;
                         client = AntigravityClient::from_slot(Some(current_slot), Some(current_model.clone()));
@@ -1554,7 +1680,7 @@ async fn execute_chat(
                             email.green().bold()
                         );
                     } else {
-                        println!("{} Некорректный номер слота: '{}'", "❌ Ошибка:".red().bold(), parts[1]);
+                        println!("{} Некорректный аргумент: '{}'. Используйте число (/slot 2), или /slot list, /slot add, /slot rotate", "❌ Ошибка:".red().bold(), parts[1]);
                     }
                 }
                 _ => {

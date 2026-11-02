@@ -1,6 +1,6 @@
 [package]
 name = "agy-cli"
-version = "4.0.0"
+version = "4.0.1"
 edition = "2021"
 authors = ["Antigravity Core Team"]
 description = "Autonomous Headless CLI for Absolute Antigravity"
